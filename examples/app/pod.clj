@@ -1160,7 +1160,8 @@
   (future
     (run!
      fs/delete
-     (fs/list-dir episodes-dir))))
+     (fs/list-dir episodes-dir))
+    (ios/prompt-bool {:title "done!"})))
 
 (defeffect ::refresh-all [{}]
   (future
