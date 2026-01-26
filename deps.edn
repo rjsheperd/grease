@@ -1,18 +1,11 @@
 {:paths ["src"
          ;; "classes" "generated_classes" "library/classes"
 ]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+ :deps {org.clojure/clojure      {:mvn/version "1.12.0"}
         com.phronemophobic/scify {:mvn/version "1.0"}
-        org.clojure/data.json {:mvn/version "2.5.0"}
-        cnuernber/dtype-next {;; :mvn/version "10.113"
-                              :local/root "../dtype-next"
-                              }
-        ;; cnuernber/dtype-next           {:mvn/version "9.021"
-        ;;                                 ;; :local/root "../dtype-next"
-        ;;                                 }
-        net.java.dev.jna/jna           {:mvn/version "5.14.0"}
-        }
- 
+        org.clojure/data.json    {:mvn/version "2.5.0"}
+        cnuernber/dtype-next     {:mvn/version "10.113"}
+        net.java.dev.jna/jna     {:mvn/version "5.14.0"}}
 
  :aliases
  {:test {:extra-paths ["test"]
@@ -35,17 +28,13 @@
                            "third_party/babashka/src"
                            ]
              :extra-deps
-             {com.phronemophobic/membrane {;; :mvn/version "0.15.0-beta-SNAPSHOT"
-                                           :local/root "../membrane"
-                                           }
-              com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "RELEASE"
-                                                                    ;; :local/root "csource/macos-aarch64"
-                                                                    }
+             {com.phronemophobic/membrane                        {:mvn/version "0.15.0-beta"}
+              com.phronemophobic.membrane/skialib-macosx-aarch64 {:mvn/version "0.15.0-beta"}
 
               babashka/babashka.nrepl {:mvn/version "0.0.7"}
-              org.clojure/data.xml {:mvn/version "0.2.0-alpha8"}
-              com.h2database/h2 {:mvn/version "2.2.224"}
-              seancorfield/next.jdbc {:mvn/version "1.1.610"}
+              org.clojure/data.xml    {:mvn/version "0.2.0-alpha8"}
+              com.h2database/h2       {:mvn/version "2.2.224"}
+              seancorfield/next.jdbc  {:mvn/version "1.1.610"}
 
               com.github.seancorfield/honeysql {:mvn/version "2.6.1161"}
 
@@ -57,22 +46,14 @@
               ;;                    :mvn/version "1.3.191"
               ;;                    }
 
-              org.babashka/sci {:mvn/version "0.8.43"
-                                ;; :local/root "../sci"
-                                }
-              babashka/fs {:mvn/version "0.5.22"}
+              org.babashka/sci  {:mvn/version "0.8.43"}
+              babashka/fs       {:mvn/version "0.5.22"}
               mogenslund/liquid {:mvn/version "2.0.3"}
 
               http-kit/http-kit {:mvn/version "2.8.0"}
 
-              com.phronemophobic/objcjure {:local/root "../objcjure"
-                                           ;;:git/url "https://github.com/phronmophobic/objcjure.git"
-                                           ;;:git/sha "f06b2395a20b44fc626a317a497d1eca815de328"
-                                           }
-              com.phronemophobic/clong {;; :git/sha "945d9a71c6436938b3bdf11de2e7bf1f1c4c978c"
-                                        :local/root "../clong"
-                                        ;; :mvn/version "1.4.1"
-                                        }}}
+              com.phronemophobic/objcjure {:mvn/version "1.0"}
+              com.phronemophobic/clong    {:mvn/version "1.4.1"}}}
 
   :depstar
   {:replace-deps {com.github.seancorfield/depstar {:mvn/version "2.0.216"}}
