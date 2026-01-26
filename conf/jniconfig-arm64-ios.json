@@ -293,4 +293,16 @@
     "name":"sun.nio.ch.FileChannelImpl",
     "fields":[{"name":"fd"}]
   }
+,
+  {
+    "name":"sun.security.ec",
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allMethods": true
+  }
+,
+  {
+    "name":"sun.security.ec",
+    "methods":[{"name":"<init>","parameterTypes":[] }]
+  }
 ]

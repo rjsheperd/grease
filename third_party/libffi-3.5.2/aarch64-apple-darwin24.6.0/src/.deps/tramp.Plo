@@ -1,0 +1,6 @@
+src/tramp.lo: ../src/tramp.c fficonfig.h \
+  /nix/store/l8n4jk7l60yb7jag3i17bz57s7rvf0rd-clang-wrapper-16.0.6/resource-root/include/stddef.h \
+  /nix/store/l8n4jk7l60yb7jag3i17bz57s7rvf0rd-clang-wrapper-16.0.6/resource-root/include/__stddef_max_align_t.h
+fficonfig.h:
+/nix/store/l8n4jk7l60yb7jag3i17bz57s7rvf0rd-clang-wrapper-16.0.6/resource-root/include/stddef.h:
+/nix/store/l8n4jk7l60yb7jag3i17bz57s7rvf0rd-clang-wrapper-16.0.6/resource-root/include/__stddef_max_align_t.h:

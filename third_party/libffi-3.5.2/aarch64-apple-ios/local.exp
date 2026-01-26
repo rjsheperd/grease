@@ -1,0 +1,3 @@
+set CC_FOR_TARGET "xcrun -sdk iphoneos clang -arch arm64 -target arm64-apple-ios16.0"
+set CXX_FOR_TARGET "xcrun -sdk iphoneos clang++ -arch arm64 -target arm64-apple-ios16.0"
+set compiler_vendor "clang"
