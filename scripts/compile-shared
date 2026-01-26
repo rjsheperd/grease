@@ -21,6 +21,8 @@ rm -rf ./tmp
 $GRAALVM_HOME/bin/native-image \
     --report-unsupported-elements-at-runtime \
     --no-fallback \
+    --allow-incomplete-classpath \
+    --features=clj_easy.graal_build_time.InitClojureClasses \
     -H:+ExitAfterRelocatableImageWrite \
     -H:+SharedLibrary \
     -H:+AddAllCharsets \
@@ -31,12 +33,10 @@ $GRAALVM_HOME/bin/native-image \
     -H:-SpawnIsolates \
     -H:PageSize=16384 \
     -Djdk.internal.lambda.eagerlyInitialize=false \
-    -H:+ReportExceptionStackTraces \
     -H:TempDirectory="$PROJECT_DIR"/library/tmp \
     -H:ReflectionConfigurationFiles="${PROJECT_DIR}"/conf/reflectionconfig-arm64-ios.json \
     -H:JNIConfigurationFiles="${PROJECT_DIR}"/conf/jniconfig-arm64-ios.json \
     -H:ResourceConfigurationFiles="${PROJECT_DIR}"/conf/resourceconfig-arm64-ios.json \
-    --initialize-at-build-time=sun.security.ec \
     -H:EnableURLProtocols=http,https \
     -J-Xmx3G \
     -J-XX:MaxDirectMemorySize=2G \
@@ -49,8 +49,7 @@ $GRAALVM_HOME/bin/native-image \
     -H:CAPCacheDir="${PROJECT_DIR}"/conf/capcache \
     -H:CompilerBackend=lir \
     '-Dsvm.platform=org.graalvm.nativeimage.Platform$IOS_AARCH64' \
-    -jar ../target/bb.jar \
-
+    -jar ../target/bb.jar
 
     # -J-Xmx20G \
     # -J-XX:MaxDirectMemorySize=8G \
