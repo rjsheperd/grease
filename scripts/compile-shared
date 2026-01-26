@@ -21,6 +21,7 @@ rm -rf ./tmp
 $GRAALVM_HOME/bin/native-image \
     --report-unsupported-elements-at-runtime \
     --no-fallback \
+    --allow-incomplete-classpath \
     -H:+ExitAfterRelocatableImageWrite \
     -H:+SharedLibrary \
     -H:+AddAllCharsets \
@@ -36,7 +37,6 @@ $GRAALVM_HOME/bin/native-image \
     -H:ReflectionConfigurationFiles="${PROJECT_DIR}"/conf/reflectionconfig-arm64-ios.json \
     -H:JNIConfigurationFiles="${PROJECT_DIR}"/conf/jniconfig-arm64-ios.json \
     -H:ResourceConfigurationFiles="${PROJECT_DIR}"/conf/resourceconfig-arm64-ios.json \
-    --initialize-at-build-time=sun.security.ec \
     -H:EnableURLProtocols=http,https \
     -J-Xmx3G \
     -J-XX:MaxDirectMemorySize=2G \
