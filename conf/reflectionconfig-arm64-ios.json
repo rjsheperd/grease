@@ -13,6 +13,12 @@
   "allPublicConstructors" : true
 },
 {
+  "name" : "tech.v3.datatype.array_buffer.ArrayBuffer",
+  "allPublicMethods" : true,
+  "allPublicFields" : true,
+  "allPublicConstructors" : true
+},
+{
   "name" : "org.h2.jdbc.JdbcConnection",
   "allPublicMethods" : true,
   "allPublicFields" : true,
@@ -1363,7 +1369,11 @@
   "allPublicFields" : true,
   "allPublicConstructors" : true
 }
-
-
-
+,
+  {
+    "name": "com.phronemophobic.grease.interface",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true,
+    "allDeclaredMethods": true
+  }
 ]
