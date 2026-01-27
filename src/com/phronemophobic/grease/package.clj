@@ -1,0 +1,86 @@
+^{:doc "Copied from from clj-easy"}
+(ns com.phronemophobic.grease.package
+  (:require [clojure.string :as str]
+            [clojure.java.io :as io])
+  (:import [java.nio.file Path]
+           [java.util.jar JarFile JarFile$JarFileEntry])
+  (:gen-class
+   :methods [^{:static true} [list [java.util.List] "[Ljava.lang.String;"]
+             ^{:static true} [listStr ["[Ljava.lang.String;"] String]]))
+
+(def ^:private jar-entry-file-separator "/")
+
+(defn ^:private entry->package [nm split]
+  (let [package (->> (str/split nm (re-pattern (str/re-quote-replacement split)))
+                     drop-last
+                     (str/join "."))]
+    (when (str/blank? package)
+      (println (str "[clj-easy/graal-build-time] WARN: Single segment namespace found for class: " nm ". "
+                    "Because this class has no package, it cannot be registered for initialization at build time.")))
+    package))
+
+(defn ^:private consider-entry? [nm file-sep]
+  (and (not (str/starts-with? nm (str "clojure" file-sep)))
+       (str/ends-with? nm "__init.class")))
+
+(defn ^:private contains-parent? [packages package]
+  (some #(and (not= % package)
+              (str/starts-with? (str package ".")  (str % ".")))
+        packages))
+
+(defn ^:private unique-packages [packages]
+  (->> packages
+       (remove (partial contains-parent? packages))
+       set))
+
+(defn ^:private packages-from-jar
+  [jar-file]
+  (with-open [jar (JarFile. jar-file)]
+    (let [entries (enumeration-seq (.entries jar))
+          packages (->> entries
+                        (map #(.getName ^JarFile$JarFileEntry %))
+                        (filter #(consider-entry? % jar-entry-file-separator))
+                        (map #(entry->package % jar-entry-file-separator))
+                        (remove str/blank?)
+                        vec)]
+      packages)))
+
+(defn ^:private packages-from-dir [^Path dir]
+  (let [f (.toFile dir)
+        files (rest (file-seq f))
+        relatives (map (fn [^java.io.File f]
+                         (let [path (.toPath f)]
+                           (.relativize dir path)))
+                       files)
+        names (map str relatives)
+        packages (->> names
+                      (filter #(consider-entry? % (System/getProperty "file.separator")))
+                      (map #(entry->package % (System/getProperty "file.separator")))
+                      (remove str/blank?))]
+    packages))
+
+(defn -list [paths]
+  (->> paths
+       (mapcat (fn [path]
+                 (if (str/ends-with? (str path) ".jar")
+                   (packages-from-jar path)
+                   (packages-from-dir path))))
+       unique-packages
+       sort
+       (cons "clojure")
+       distinct
+       into-array))
+
+(defn -listStr [pl]
+  (str/join ", " pl))
+
+(comment
+
+  (-> (packages-from-jar (io/file "target/bb.jar"))
+      (unique-packages)
+      (sort)
+      (conj "clojure")
+      (distinct)
+      (->> (str/join ","))) ;"clojure,babashka.nrepl,bencode,clj_commons,com.phronemophobic,edamame,ham_fisted,insn,sci,tech.v3" 
+
+  )

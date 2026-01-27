@@ -2,8 +2,7 @@
   (:require [tech.v3.datatype.ffi :as dt-ffi]
             #_[sci.core :as sci]
             #_[sci.addons :as addons]
-            ;;babashka.nrepl.server
-            )
+            #_babashka.nrepl.server)
   (:import org.graalvm.nativeimage.c.function.CEntryPointLiteral
            tech.v3.datatype.ffi.Pointer
            org.graalvm.word.WordBase)
