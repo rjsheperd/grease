@@ -50,6 +50,11 @@
       <artifactId>jna</artifactId>
       <version>5.14.0</version>
     </dependency>
+    <dependency>
+      <groupId>babashka</groupId>
+      <artifactId>babashka.nrepl</artifactId>
+      <version>0.0.7</version>
+    </dependency>
   </dependencies>
   <build>
     <sourceDirectory>src</sourceDirectory>

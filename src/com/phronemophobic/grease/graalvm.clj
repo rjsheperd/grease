@@ -67,4 +67,6 @@
        (map #(str/join "." %))
        distinct
        (map munge)
-       (cons "clojure")))
+       (cons "clojure")
+       (str/join ",")
+       (str "--initialize-at-build-time=")))
