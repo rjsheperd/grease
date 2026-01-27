@@ -11,7 +11,7 @@ PROJECT_DIR="$DIR/.."
 
 cd ..
 
-# clojure -X:depstar
+clojure -X:depstar
 
 mkdir -p library
 pushd library
@@ -22,8 +22,8 @@ $GRAALVM_HOME/bin/native-image \
     --report-unsupported-elements-at-runtime \
     --no-fallback \
     --allow-incomplete-classpath \
-    --initialize-at-build-time=clojure,clj_commons,edamame,ham_fisted,insn,sci,tech.v3 \
-    --initialize-at-run-time=com.phronemophobic.grease.interface,tech.v3.datatype \
+    --initialize-at-build-time=clojure,clj_commons,com.phronemophobic,edamame.impl,ham_fisted,insn,sci,tech.v3,tech.v3.datatype,tech.v3.datatype.ffi \
+    --initialize-at-run-time=com.phronemophobic.grease.interface \
     -H:+ExitAfterRelocatableImageWrite \
     -H:+SharedLibrary \
     -H:+AddAllCharsets \
@@ -40,7 +40,7 @@ $GRAALVM_HOME/bin/native-image \
     -H:JNIConfigurationFiles="${PROJECT_DIR}"/conf/jniconfig-arm64-ios.json \
     -H:ResourceConfigurationFiles="${PROJECT_DIR}"/conf/resourceconfig-arm64-ios.json \
     -H:EnableURLProtocols=http,https \
-    -J-Xmx3G \
+    -J-Xmx8G \
     -J-XX:MaxDirectMemorySize=2G \
     -J-Dclojure.spec.skip-macros=true \
     -J-Dclojure.compiler.direct-linking=true \

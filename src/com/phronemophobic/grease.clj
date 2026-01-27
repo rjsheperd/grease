@@ -1,7 +1,7 @@
 (ns com.phronemophobic.grease
   (:require [tech.v3.datatype.ffi :as dt-ffi]
-            #_[sci.core :as sci]
-            #_[sci.addons :as addons]
+            [sci.core :as sci]
+            [sci.addons :as addons]
             #_babashka.nrepl.server)
   (:import org.graalvm.nativeimage.c.function.CEntryPointLiteral
            tech.v3.datatype.ffi.Pointer
@@ -44,16 +44,15 @@
   (prn (get-result id)))
 
 (defn clj_eval [bs]
-  42
-  #_(add-result (sci/eval-string (dt-ffi/c->string bs))))
+  (add-result (sci/eval-string (dt-ffi/c->string bs))))
 
 (defn clj_print_hi []
   (println "hi"))
 
-;; (def opts (-> {:classes {'System java.lang.System}
-;;                :namespaces {'foo.bar {'x 1}}}
-;;               addons/future))
-;; (def sci-ctx (sci/init opts))
+(def opts (-> {:classes {'System java.lang.System}
+               :namespaces {'foo.bar {'x 1}}}
+              addons/future))
+(def sci-ctx (sci/init opts))
 
 (defn clj_start_server []
   #_(babashka.nrepl.server/start-server! sci-ctx {:host "0.0.0.0" :port 23456}))

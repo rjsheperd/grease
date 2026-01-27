@@ -1,36 +1,34 @@
 [
-
-{
-  "name" : "tech.v3.datatype.ffi.Pointer",
-  "allPublicMethods" : true,
-  "allPublicFields" : true,
-  "allPublicConstructors" : true
-},
-{
-  "name" : "tech.v3.datatype.struct.Struct",
-  "allPublicMethods" : true,
-  "allPublicFields" : true,
-  "allPublicConstructors" : true
-},
-{
-  "name" : "tech.v3.datatype.array_buffer.ArrayBuffer",
-  "allPublicMethods" : true,
-  "allPublicFields" : true,
-  "allPublicConstructors" : true
-},
-{
-  "name" : "org.h2.jdbc.JdbcConnection",
-  "allPublicMethods" : true,
-  "allPublicFields" : true,
-  "allPublicConstructors" : true
-},
-{
-  "name" : "java.net.Inet4Address",
-  "allPublicMethods" : true,
-  "allPublicFields" : true,
-  "allPublicConstructors" : true
-},
-
+  {
+    "name" : "tech.v3.datatype.ffi.Pointer",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },
+  {
+    "name" : "tech.v3.datatype.struct.Struct",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },
+  {
+    "name" : "tech.v3.datatype.array_buffer.ArrayBuffer",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },
+  {
+    "name" : "org.h2.jdbc.JdbcConnection",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },
+  {
+    "name" : "java.net.Inet4Address",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },
   {
     "name":"java.lang.Character",
     "methods":[{"name":"isIdeographic","parameterTypes":["int"] }]
