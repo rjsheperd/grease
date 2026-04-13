@@ -504,7 +504,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/aarch64-apple-ios/.libs",
-					"$(PROJECT_DIR)/../../lib",
+					"$(PROJECT_DIR)/../../lib/ios-arm64/",
 				);
 				OTHER_LDFLAGS = (
 					"-ljava",
@@ -521,9 +521,7 @@
 					"-lextnet",
 					"-lstdc++",
 					"-lpthread",
-					"-llibchelper",
 					"-lffi",
-					"-ldarwin",
 					"-Wl,-framework,Foundation",
 					"-Wl,-framework,UIKit",
 					"-Wl,-framework,CoreGraphics",
@@ -585,7 +583,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/aarch64-apple-ios/.libs",
-					"$(PROJECT_DIR)/../../lib",
+					"$(PROJECT_DIR)/../../lib/ios-arm64/",
 				);
 				OTHER_LDFLAGS = (
 					"-ljava",
@@ -602,9 +600,7 @@
 					"-lextnet",
 					"-lstdc++",
 					"-lpthread",
-					"-llibchelper",
 					"-lffi",
-					"-ldarwin",
 					"-Wl,-framework,Foundation",
 					"-Wl,-framework,UIKit",
 					"-Wl,-framework,CoreGraphics",

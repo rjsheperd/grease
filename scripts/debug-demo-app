@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/debug-demo-app
+#
+# Launch the MobileTest demo app under LLDB on a connected iOS device.
+#
+# Usage:
+#   ./scripts/debug-demo-app              # install app, then attach lldb
+#   ./scripts/debug-demo-app --noinstall  # skip reinstall, launch + attach lldb
+#   ./scripts/debug-demo-app --nolldb     # start debugserver only (DIY lldb)
+#
+# ios-deploy opens an interactive lldb session in the terminal. The app's
+# stdout is forwarded — watch for the nREPL banner:
+#
+#   === Clojure nREPL ===
+#   Connect: 192.168.x.x:23456
+#
+# Then connect from a second terminal:
+#
+#   clj -M -m nrepl.cmdline --connect --host <device-ip> --port 23456
+#
+# Prerequisites:
+#   brew install ios-deploy
+#   ./scripts/build-demo-app   (produces the .app in DerivedData)
+#   ./scripts/deploy-demo-app  (signs and installs on device)
+#
+# Environment variables (required — set in .envrc):
+#   XCODE_DEVELOPER_DIR  Path to Xcode 14.3.1 Developer dir
+#   DEVICE_UDID          iOS device UDID
+#
+# Optional:
+#   CONFIGURATION   Debug or Release  (default: Debug)
+#   NREPL_PORT      nREPL port shown in tips  (default: 23456)
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_DIR="$DIR/.."   # grease root
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+CONFIGURATION="${CONFIGURATION:-Debug}"
+NREPL_PORT="${NREPL_PORT:-23456}"
+BUNDLE_ID="com.rjsheperd.MobileTest"
+
+XCODE_PROJECT="$PROJECT_DIR/xcode/MobileTest/MobileTest.xcodeproj"
+XCODE_SCHEME="MobileTest"
+XCODE_DEVELOPER_DIR="${XCODE_DEVELOPER_DIR:?XCODE_DEVELOPER_DIR not set — add it to .envrc}"
+XCODEBUILD="$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild"
+IOS_DEPLOY="/opt/homebrew/bin/ios-deploy"
+
+DEVICE_UDID="${DEVICE_UDID:?DEVICE_UDID not set — add it to .envrc}"
+
+# =============================================================================
+# Parse arguments
+# =============================================================================
+
+MODE="install"
+
+for arg in "$@"; do
+    case "$arg" in
+        --noinstall|-m)  MODE="noinstall" ;;
+        --nolldb|-N)     MODE="nolldb" ;;
+        --help|-h)
+            cat <<HELP
+Usage: $(basename "$0") [OPTIONS]
+
+  (default)     Install app bundle, launch under lldb
+  --noinstall   Skip reinstall; launch the already-installed app under lldb
+  --nolldb      Start debugserver only — no lldb session
+
+Environment (set in .envrc):
+  XCODE_DEVELOPER_DIR   Xcode 14.3.1 Developer dir
+  DEVICE_UDID           iOS device UDID
+  CONFIGURATION         Debug or Release (default: Debug)
+  NREPL_PORT            nREPL port shown in tips (default: 23456)
+HELP
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown argument: $arg  (try --help)"
+            exit 1
+            ;;
+    esac
+done
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if [ ! -x "$IOS_DEPLOY" ]; then
+    echo "ERROR: ios-deploy not found at $IOS_DEPLOY"
+    echo "  Install: brew install ios-deploy"
+    exit 1
+fi
+
+echo "  ios-deploy: $("$IOS_DEPLOY" --version 2>&1 | head -1)"
+echo "  device:     $DEVICE_UDID"
+echo "  mode:       $MODE"
+echo ""
+
+# =============================================================================
+# Resolve app bundle
+# =============================================================================
+
+BUILT_PRODUCTS_DIR=$("$XCODEBUILD" \
+    -project       "$XCODE_PROJECT" \
+    -scheme        "$XCODE_SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -showBuildSettings 2>/dev/null \
+    | grep '^\s*BUILT_PRODUCTS_DIR' \
+    | head -1 \
+    | awk -F' = ' '{print $2}' \
+    | xargs)
+
+APP="$BUILT_PRODUCTS_DIR/MobileTest.app"
+
+if [ ! -d "$APP" ]; then
+    echo "ERROR: App bundle not found at $APP"
+    echo "  Run ./scripts/build-demo-app then ./scripts/deploy-demo-app first."
+    exit 1
+fi
+
+echo "  app:    $APP ($(du -sh "$APP" | cut -f1))"
+echo "  config: $CONFIGURATION"
+echo ""
+
+# =============================================================================
+# lldb quick-reference
+# =============================================================================
+
+cat <<TIPS
+================================================================
+  lldb quick reference
+================================================================
+
+  Resume from launch pause:
+    (lldb) process continue
+
+  Break at nREPL server start:
+    (lldb) breakpoint set --name clj_start_server
+    (lldb) process continue
+
+  After seeing the banner in stdout:
+    === Clojure nREPL ===
+    Connect: <device-ip>:$NREPL_PORT
+
+  Connect from a second terminal:
+    clj -M -m nrepl.cmdline --connect --host <device-ip> --port $NREPL_PORT
+
+  Detach without killing the app:
+    (lldb) detach
+
+================================================================
+
+TIPS
+
+# =============================================================================
+# Launch
+# =============================================================================
+
+echo "=== Starting debugger ($MODE) ==="
+
+case "$MODE" in
+    install)
+        exec "$IOS_DEPLOY" \
+            --bundle "$APP" \
+            --id     "$DEVICE_UDID" \
+            --debug  \
+            --no-wifi
+        ;;
+    noinstall)
+        exec "$IOS_DEPLOY" \
+            --bundle    "$APP" \
+            --id        "$DEVICE_UDID" \
+            --noinstall \
+            --no-wifi
+        ;;
+    nolldb)
+        exec "$IOS_DEPLOY" \
+            --bundle "$APP" \
+            --id     "$DEVICE_UDID" \
+            --nolldb \
+            --no-wifi
+        ;;
+esac

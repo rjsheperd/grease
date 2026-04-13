@@ -1,0 +1,590 @@
+#+TITLE: Outskirts — How Far Can This Go?
+#+AUTHOR: grease project
+#+DATE: 2026-04-13
+#+OPTIONS: toc:2 num:nil
+
+Live Clojure on a real iOS device — nREPL over WiFi, GraalVM native-image
+AOT compilation, SCI interpretation at runtime, full FFI to native frameworks
+via clj-libffi, ObjC message dispatch via objcjure.  This document maps the
+frontier: what works today, what is close, and what is theoretically possible.
+
+* Status Legend
+
+| Symbol | Meaning                                    |
+|--------+--------------------------------------------|
+| ✅      | Works today in the current build           |
+| 🟡      | Partially works; needs plumbing            |
+| 🔲      | Unimplemented; clear path forward          |
+| ⚠️      | Requires caution / known pitfall           |
+| 🚫      | Blocked by iOS sandbox or Apple policy     |
+
+* What Works Today
+
+** ✅ Live nREPL on Device
+
+The device runs ~babashka.nrepl.server~ inside SCI.  Connect over WiFi:
+
+#+begin_src bash
+clj-nrepl-eval --host 192.168.0.111 --port 23456 "(+ 1 2)"
+# => 3
+#+end_src
+
+- Namespace definitions persist across evals within a session.
+- ~require~ and ~in-ns~ both work.
+- Session survives ios-deploy disconnecting.
+
+** ✅ FFI Calls to Native C Functions
+
+~clj-libffi~ lets Clojure call any C symbol at runtime:
+
+#+begin_src clojure
+(require '[com.phronemophobic.clj-libffi :as ffi])
+(ffi/call "dispatch_async" :void :pointer q :pointer block)
+#+end_src
+
+~clj_log~ (Bridge.m) and ~dispatch_async~ (libdispatch) are both reachable
+today.
+
+** ✅ ObjC Message Dispatch via objcjure
+
+#+begin_src clojure
+(require '[com.phronemophobic.objcjure :refer [objc]])
+(objc [NSString stringWithUTF8String: "hello"])
+#+end_src
+
+~dispatch-main-async~ in grease.clj already uses this to schedule ObjC blocks
+on the main queue.
+
+** ✅ System Property Inspection
+
+#+begin_src clojure
+{:os   (System/getProperty "os.name")   ;; "iOS"
+ :arch (System/getProperty "os.arch")   ;; "arm64"
+ :time (System/currentTimeMillis)}
+#+end_src
+
+** ✅ Network Interface Enumeration
+
+~get-addresses~ in grease.clj uses ~java.net.NetworkInterface~ to list IPv4
+addresses on ~en*~ interfaces.  Reachable from SCI via the exported binding.
+
+** ✅ stdout → On-Screen Log Buffer
+
+Bridge.m installs a ~pipe()+dup2()~ redirect on fd 1 at startup.  A GCD
+background thread reads the pipe and appends to ~g_log_buf~.  ContentView.swift
+polls ~bridge_get_logs()~ every 500 ms and renders the buffer on-screen.
+
+** ✅ SwiftUI Log Display
+
+ContentView already colour-codes lines:
+- ~[Clojure]~ → green
+- ~[Bridge]~  → amber
+- ~error~     → red
+
+* Low-Hanging Fruit
+
+** 🟡 Printing to the On-Screen Log from nREPL
+
+*Problem:* nREPL rebinds ~*out*~ to a session ~StringWriter~, so ~println~
+goes back to the client, not to fd 1.
+
+*Solution A — write to System/out directly:*
+
+#+begin_src clojure
+(.println System/out "hello from nREPL")
+(.flush  System/out)
+#+end_src
+
+*Solution B — call clj_log via FFI:*
+
+#+begin_src clojure
+;; Needs ffi/call with a :string arg type for null-terminated char*
+(ffi/call "clj_log" :void :string "hello from nREPL via clj_log")
+#+end_src
+
+~tech.v3.datatype.ffi/string->c~ can produce the right pointer type.
+The ~:string~ arg type support in clj-libffi needs verification.
+
+*Solution C — expose a Clojure log fn in the SCI context:*
+
+Add to ~grease.clj~ opts under ~com.phronemophobic.grease~:
+
+#+begin_src clojure
+'device-log (sci/new-var 'device-log
+              (fn [msg] (.println System/out (str "[Clojure] " msg))
+                        (.flush System/out)))
+#+end_src
+
+Then from the REPL: ~(grease/device-log "visible on device")~.
+
+** 🔲 clojure.string / clojure.set / clojure.walk in SCI
+
+These are pure-Clojure namespaces and load cleanly in SCI.  Add to ~opts~:
+
+#+begin_src clojure
+(sci/load-string ctx "(require 'clojure.string 'clojure.set 'clojure.walk)")
+#+end_src
+
+or pre-bind them in ~opts :namespaces~.
+
+** 🔲 File System Access — Documents Directory
+
+The iOS sandbox allows read/write to the app's Documents directory.
+
+#+begin_src clojure
+(System/getProperty "user.home")
+;; => something under /var/mobile/Containers/Data/Application/<UUID>
+
+;; Write a file
+(spit "/var/mobile/Containers/Data/Application/<UUID>/Documents/repl.clj"
+      "(println \"loaded\")")
+
+;; Read it back
+(slurp ".../Documents/repl.clj")
+#+end_src
+
+SCI's ~sci/eval-string~ can execute those files.  ~java.io.File~ is not in the
+current SCI ~:classes~ allow-list — add it to ~opts~ to unlock ~io/file~,
+~spit~, ~slurp~.
+
+Test to prove the path:
+
+#+begin_src clojure
+(require '[com.phronemophobic.grease :as grease])
+(.exists (java.io.File. (grease/documents-dir)))
+#+end_src
+
+** 🔲 SQLite Persistence
+
+SQLite is available as a C library on every iOS device (~libsqlite3.dylib~).
+
+#+begin_src clojure
+(ffi/call "sqlite3_open" :int32 :string "/path/to/app.db" :pointer db-ptr)
+(ffi/call "sqlite3_exec" :int32 :pointer db :string "CREATE TABLE kv(k TEXT, v TEXT)" ...)
+#+end_src
+
+This unlocks a full embedded Clojure data store with zero extra dependencies.
+~next.jdbc~ won't compile (JDBC), but a thin FFI wrapper around the C API is
+~50 lines of Clojure.
+
+* Medium Effort
+
+** 🔲 Bidirectional SwiftUI ↔ Clojure State
+
+*Current:* Clojure writes to the log buffer; Swift polls.
+
+*Goal:* Expose a Clojure atom whose value is rendered directly in SwiftUI.
+
+Architecture:
+
+1. Add ~@State private var clojureState: [String: Any] = [:]~ to ContentView.
+2. Expose a ~bridge_get_state()~ C function that serialises the atom to JSON.
+3. Swift polls ~bridge_get_state()~ alongside ~bridge_get_logs()~.
+4. From Clojure: ~(reset! ui-state {:label "tap me" :count 0})~.
+
+Reverse direction (SwiftUI → Clojure):
+
+#+begin_src swift
+Button("Tap") { call_eval("(swap! ui-state update :count inc)") }
+#+end_src
+
+This gives a live SwiftUI UI driven entirely from the nREPL.
+
+** 🔲 CoreLocation / GPS from the REPL
+
+CoreLocation requires an ObjC delegate and main-thread setup.  With objcjure
+and ~dispatch-main-async~ this is reachable:
+
+#+begin_src clojure
+(dispatch-main-async
+  #(let [mgr (objc [CLLocationManager new])]
+     (objc [mgr setDelegate: delegate])
+     (objc [mgr startUpdatingLocation])))
+#+end_src
+
+The delegate must be an ObjC object — needs a small Bridge.m helper or a
+~CLLocationManagerDelegate~ defined via objcjure's class-builder.
+
+Test: ~(ffi/call "CLLocationManager" :pointer)~ — does the class exist?
+
+** 🔲 CoreMotion — Accelerometer / Gyroscope
+
+#+begin_src clojure
+(dispatch-main-async
+  #(let [cm (objc [CMMotionManager new])]
+     (objc [cm startAccelerometerUpdatesToQueue: queue
+                withHandler: (fn [data err]
+                               (println (objc [data acceleration])))])))
+#+end_src
+
+~CMMotionManager~ is already linked (~CoreMotion~ framework is in
+~OTHER_LDFLAGS~).  The handler is an ObjC block — clj-libffi's block creation
+machinery handles this.
+
+** 🔲 HTTP Client from Device
+
+~java.net.URL~ is in the SCI allow-list today.  ~slurp~ over HTTP:
+
+#+begin_src clojure
+(slurp "https://api.ipify.org")
+#+end_src
+
+Test this first — GraalVM's HTTP stack on iOS may need ~EnableURLProtocols~
+(already set in native-image flags: ~-H:EnableURLProtocols=http,https~).
+
+If ~slurp~ works, an HTTP client library like ~clj-http-lite~ can be added to
+the uberjar if its dependencies are native-image compatible.
+
+** 🔲 AVFoundation — Camera / Microphone
+
+Requires entitlements (~NSCameraUsageDescription~, ~NSMicrophoneUsageDescription~
+in Info.plist) and main-thread delegate setup.
+
+#+begin_src clojure
+(dispatch-main-async
+  #(let [session (objc [AVCaptureSession new])]
+     (objc [session beginConfiguration])
+     ;; ... add inputs/outputs ...
+     (objc [session commitConfiguration])
+     (objc [session startRunning])))
+#+end_src
+
+Frame data can be passed back to Clojure via FFI callbacks.
+
+** 🔲 clojure.test Execution on Device
+
+SCI supports ~clojure.test~.  Add it to the SCI context and run test suites
+through the nREPL:
+
+#+begin_src clojure
+;; From nREPL
+(require '[clojure.test :refer [deftest is run-tests]])
+
+(deftest math-test
+  (is (= 4 (+ 2 2)))
+  (is (= "iOS" (System/getProperty "os.name"))))
+
+(run-tests)
+#+end_src
+
+This enables device-specific test suites that can catch ARM64/iOS-only bugs
+before App Store submission.
+
+Automate by scripting ~clj-nrepl-eval~ from CI after each ~build-bb-o~:
+
+#+begin_src bash
+clj-nrepl-eval --host $DEVICE_IP --port 23456 \
+  "(require 'my.tests :reload)(clojure.test/run-tests 'my.tests)"
+#+end_src
+
+** 🔲 Hot-Reload File Watcher
+
+Watch local ~.clj~ files and push them to the device on save:
+
+#+begin_src bash
+# Using fswatch + clj-nrepl-eval
+fswatch -o src/ | xargs -n1 -I{} \
+  clj-nrepl-eval --host $DEVICE_IP --port 23456 \
+    "(load-file \"$(changed-file)\")"
+#+end_src
+
+Round-trip latency is network RTT only (~1 ms over USB / ~5 ms WiFi).
+This is the full hot-reload inner loop without ever running ~build-bb-o~.
+
+Newly eval'd functions become live immediately — including functions called by
+the next UI event, the next poll tick, or a running ~future~.
+
+** 🔲 CIDER / Calva Integration
+
+The nREPL server speaks the standard nREPL protocol.  Add ~cider-nrepl~
+middleware to ~babashka.nrepl.server/start-server!~ opts for full CIDER
+support:
+
+#+begin_src clojure
+(babashka.nrepl.server/start-server!
+  @sci-ctx
+  {:host "0.0.0.0"
+   :port port
+   :middleware [cider.nrepl/cider-middleware]})
+#+end_src
+
+Unlocks: inline eval in Emacs/Calva, doc lookup, stacktrace navigation,
+~cider-inspect~, test runner integration — all against the live device.
+
+* Frontier Territory
+
+** 🔲 Define New ObjC Classes from Clojure
+
+objcjure supports ObjC message sending today.  Defining new ObjC classes
+requires ~objc_allocateClassPair~ / ~class_addMethod~ — both are reachable via
+FFI:
+
+#+begin_src clojure
+(let [cls (ffi/call "objc_allocateClassPair" :pointer
+                    :pointer (ffi/call "objc_getClass" :pointer :string "NSObject")
+                    :string  "ClojureViewController"
+                    :size    0)]
+  (ffi/call "objc_registerClassPair" :void :pointer cls))
+#+end_src
+
+With method implementations as FFI callbacks, this would allow defining a full
+~UIViewController~ subclass in Clojure — no Swift or Objective-C required for
+UI logic.
+
+** 🔲 Metal GPU Compute from Clojure
+
+Metal is available as a framework.  A compute kernel can be created and
+dispatched entirely via FFI:
+
+#+begin_src clojure
+(dispatch-main-async
+  #(let [dev   (ffi/call "MTLCreateSystemDefaultDevice" :pointer)
+         lib   (objc [dev newDefaultLibrary])
+         fn    (objc [lib newFunctionWithName: "myKernel"])
+         pipe  (objc [dev newComputePipelineStateWithFunction: fn error: nil])]
+     ;; dispatch command buffer ...
+     ))
+#+end_src
+
+Useful for: image processing, ML inference, physics simulation — all
+orchestrated from a live REPL session.
+
+** 🔲 ARKit from Clojure
+
+ARKit is already linked (~ARKit~ framework in ~OTHER_LDFLAGS~).  The
+~ARSession~ + ~ARConfiguration~ setup is a handful of ObjC messages:
+
+#+begin_src clojure
+(dispatch-main-async
+  #(let [sess   (objc [ARSession new])
+         config (objc [ARWorldTrackingConfiguration new])]
+     (objc [sess runWithConfiguration: config])))
+#+end_src
+
+The AR session's frame delegate would call back into Clojure via the FFI
+callback machinery, making it possible to write AR experiences as pure Clojure.
+
+** 🔲 Load Clojure Scripts from the Network
+
+Serve ~.clj~ files from a local HTTP server on the Mac, fetch and eval them on
+device:
+
+#+begin_src clojure
+(-> (slurp "http://192.168.0.100:8080/scripts/init.clj")
+    (sci/eval-string* @grease/sci-ctx))
+#+end_src
+
+This is effectively a remote code loader — the device fetches and evaluates
+arbitrary Clojure at runtime.
+
+⚠️  App Store rules prohibit downloading and executing code.  This is only
+appropriate for development/enterprise builds.
+
+** 🔲 visionOS / tvOS Ports
+
+GraalVM Gluon targets iOS arm64 today.  visionOS is also arm64 and uses the
+same Darwin base libraries.  Changes needed:
+
+- ~-Dsvm.platform~ equivalent for visionOS (may need Gluon update)
+- Different SDK path in ~build-bb-o~
+- visionOS-specific frameworks in ~OTHER_LDFLAGS~
+
+tvOS is simpler (no touch, TVML/UIKit subset) and would need similar changes.
+
+** 🔲 Multi-Device Clojure Cluster
+
+Each iOS device runs its own nREPL.  A coordinating machine can eval the same
+code across a fleet:
+
+#+begin_src bash
+for ip in 192.168.0.111 192.168.0.112 192.168.0.113; do
+  clj-nrepl-eval --host $ip --port 23456 "(my.app/start)" &
+done
+wait
+#+end_src
+
+With shared state via a central server (or a custom UDP broadcast), this
+sketches a distributed Clojure system running on iOS hardware.
+
+** 🔲 Persistent SCI Namespace Image
+
+After a long REPL session, serialize the SCI context's namespace table to EDN
+and write it to the Documents directory.  On next launch, restore it:
+
+#+begin_src clojure
+;; Save
+(spit (str (documents-dir) "/ns-image.edn")
+      (pr-str (sci/get-namespace-names @sci-ctx)))
+
+;; Restore (approximation — depends on sci internals)
+(doseq [ns (edn/read-string (slurp "...ns-image.edn"))]
+  (sci/eval-string* @sci-ctx (str "(require '" ns ")")))
+#+end_src
+
+This would make long-lived REPL sessions more survivable across app restarts.
+
+* Known Blockers
+
+** 🚫 Dynamic Library Loading (dylib)
+
+iOS prohibits loading external ~.dylib~ files after launch for user-installed
+apps.  All native code must be statically linked into the binary at build time.
+This is not a blocker for Clojure code (SCI interprets it), but rules out
+dynamically loading compiled native extensions at runtime.
+
+** 🚫 JIT Compilation
+
+iOS prohibits ~mmap(... PROT_WRITE|PROT_EXEC ...)~ for App Store apps.  This
+is why GraalVM's AOT native-image is required — there is no JVM JIT.  SCI
+interprets Clojure source, so its evaluation path has no JIT requirement.
+GraalVM's Truffle JIT is similarly unavailable.
+
+** ⚠️  App Store Distribution of SCI-Evaluated Code
+
+SCI evaluates Clojure source at runtime from strings.  Apple does not classify
+this as "downloading and executing code" if the strings are bundled at build
+time or received from a controlled server.  For TestFlight / enterprise
+distribution this is a non-issue.  Public App Store: consult Apple's guidelines
+before shipping a general-purpose nREPL-accessible app.
+
+** ⚠️  SCI Context Size vs. GraalVM Image Size
+
+Every namespace added to SCI opts must be reachable at build time by
+native-image.  Adding heavyweight dependencies (core.async, spec, test.check)
+to the uberjar increases the ~bb.o~ size and build time.  Current bb.o is
+146 MB.  Budget accordingly.
+
+** ⚠️  Thread Attachment for Callbacks
+
+Every OS-level callback thread (GCD worker, delegate callback) must be attached
+to the GraalVM isolate before calling Clojure.  Bridge.m's
+~clj_generic_callback~ handles this for FFI callbacks.  ObjC delegate callbacks
+set up via ~dispatch-main-async~ run on the main thread which is already
+attached.  Custom background threads must call ~graal_attach_thread~ before any
+Clojure dispatch and ~graal_detach_thread~ after.
+
+* Suggested Experiments
+
+The following can be copy-pasted directly into a ~clj-nrepl-eval~ session
+against a running device.
+
+** Experiment 1 — HTTP from Device
+
+#+begin_src clojure
+(slurp "https://api.ipify.org")
+;; Expected: "<device-public-ip>"
+;; Failure: "Connect failed" → check entitlements / networking
+#+end_src
+
+** Experiment 2 — Write to Documents Directory
+
+#+begin_src clojure
+(let [path (str (System/getProperty "user.home") "/Documents/test.txt")]
+  (spit path "hello from Clojure")
+  (slurp path))
+;; Expected: "hello from Clojure"
+#+end_src
+
+** Experiment 3 — Dispatch UI Work from REPL
+
+#+begin_src clojure
+(require '[com.phronemophobic.grease :as grease])
+(grease/dispatch-main-async
+  #(println "main thread: " (Thread/currentThread)))
+#+end_src
+
+Verify: output appears in the on-screen log (green ~[Clojure]~ line).
+
+** Experiment 4 — ObjC Class Interrogation
+
+#+begin_src clojure
+(require '[com.phronemophobic.objcjure :refer [objc]])
+(let [cls (objc [NSProcessInfo processInfo])]
+  (str (objc [cls operatingSystemVersionString])))
+;; Expected: "Version 16.6 (Build 20G75)"
+#+end_src
+
+** Experiment 5 — FFI Symbol Resolution
+
+#+begin_src clojure
+(require '[com.phronemophobic.clj-libffi :as ffi])
+
+;; Check that CoreLocation class exists
+(ffi/call "objc_getClass" :pointer :string "CLLocationManager")
+;; Expected: non-nil pointer (class object)
+
+;; Check Metal
+(ffi/call "objc_getClass" :pointer :string "MTLDevice")
+#+end_src
+
+** Experiment 6 — Long-Running Future
+
+#+begin_src clojure
+(def ticker
+  (future
+    (loop [n 0]
+      (Thread/sleep 2000)
+      (.println System/out (str "[Clojure] tick " n))
+      (.flush System/out)
+      (recur (inc n)))))
+#+end_src
+
+Verify: ~[Clojure] tick N~ lines appear on the device screen every 2 s.
+Cancel with: ~(future-cancel ticker)~.
+
+** Experiment 7 — Mutable Shared State
+
+#+begin_src clojure
+(def state (atom {:taps 0 :last-eval nil}))
+
+(defn on-tap! []
+  (swap! state update :taps inc))
+
+;; Later, from any REPL eval:
+@state
+;; => {:taps 3 :last-eval nil}
+#+end_src
+
+Wire ~on-tap!~ to a Bridge.m call triggered from SwiftUI button press.
+
+* Architecture Summary
+
+#+begin_example
+┌──────────────────────────────────────────────────────────┐
+│  Mac (development machine)                               │
+│  ┌────────────┐   clj-nrepl-eval / CIDER / Calva        │
+│  │  Editor    │ ──────────────── nREPL ──────────────▶  │
+│  └────────────┘          WiFi / USB                      │
+└───────────────────────────────────▼──────────────────────┘
+                                    │ TCP :23456
+┌───────────────────────────────────▼──────────────────────┐
+│  iOS Device (arm64)                                      │
+│                                                          │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  MobileTest.app                                  │   │
+│  │                                                  │   │
+│  │  Swift / SwiftUI (ContentView)                   │   │
+│  │    polls bridge_get_logs() @ 500ms               │   │
+│  │    renders log buffer                            │   │
+│  │                    │                             │   │
+│  │            Bridge.m (ObjC)                       │   │
+│  │              stdout pipe capture                 │   │
+│  │              GraalVM isolate lifecycle           │   │
+│  │              clj_generic_callback (FFI sink)     │   │
+│  │                    │                             │   │
+│  │            bb.o (146 MB, arm64 relocatable)      │   │
+│  │              GraalVM native-image AOT            │   │
+│  │              Clojure runtime (no JIT)            │   │
+│  │              SCI interpreter                     │   │
+│  │              babashka.nrepl.server               │   │
+│  │              clj-libffi / objcjure               │   │
+│  │              ── FFI ──▶ all iOS frameworks       │   │
+│  └──────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────┘
+#+end_example
+
+The compilation boundary is ~bb.o~.  Everything above it (SCI namespace
+definitions, nREPL-eval'd functions, FFI calls to OS APIs) is hot-reloadable
+with zero rebuild cost.  Everything below it (GraalVM runtime, SCI engine,
+libffi, clj-libffi machinery) requires a ~build-bb-o~ cycle (~20–40 min) to
+change.

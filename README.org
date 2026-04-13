@@ -1,0 +1,197 @@
+#+TITLE: Grease
+#+AUTHOR: Adrian Smith
+#+OPTIONS: toc:2
+
+Run Clojure on iOS using GraalVM native-image and JDK 21 static libraries.
+Built with [[https://github.com/phronmophobic/membrane][membrane]].
+
+For the latest discussion, see the [[https://clojurians.slack.com/archives/C0260KHN0Q0][#graalvm-mobile]] channel on Clojurians Slack.
+
+* Architecture
+
+The build pipeline has three stages:
+
+1. *ios-graal-jdk-21* — builds =libjava.a= and =libjvm.a= as iOS arm64 static
+   libraries from a patched labsJDK 21 and GraalVM SubstrateVM.
+
+2. *Clojure → bb.o* — compiles the Clojure source to an uberjar, then runs
+   =native-image= (Gluon GraalVM) to produce =bb.o= and =bb.h=.
+
+3. *MobileTest.app* — links =bb.o= with the JDK static libs inside the Xcode
+   project, then signs and installs on a connected device.
+
+* Prerequisites
+
+** Xcode 14.3.1
+
+Required for the iOS 16.4 SDK and reproducible builds. Pin the system once:
+
+#+begin_src bash
+sudo xcode-select -s /Volumes/MegaDisk2TB/XCode/AF56C562-4191-470B-AECA-8CBE68A2E188/Xcode.app
+#+end_src
+
+The nix dev shell will warn if this is not set correctly.
+
+** Gluon GraalVM
+
+Provides =native-image= with iOS arm64 support. Not available in nixpkgs;
+download from [[https://github.com/gluonhq/graal/releases]] and unpack under
+=graal/= in this directory:
+
+#+begin_src bash
+# After unpacking, ~/.graal/latest should point at Contents/Home
+export JAVA_HOME=$HOME/.graal/latest/Contents/Home
+export GRAALVM_HOME=$JAVA_HOME
+#+end_src
+
+** ios-graal-jdk-21
+
+Sibling repository that builds the JDK static libs. Clone adjacent to this repo:
+
+#+begin_src bash
+git clone https://github.com/rjsheperd/ios-graal-jdk-21 ../ios-graal-jdk-21
+#+end_src
+
+** ios-deploy
+
+Installs the signed =.app= on a connected device:
+
+#+begin_src bash
+brew install ios-deploy
+#+end_src
+
+** Nix dev shell
+
+Provides =clojure=, =autoconf=, and =fastlane= with a compatible Ruby:
+
+#+begin_src bash
+nix develop
+#+end_src
+
+* Build
+
+** Step 1: Build JDK static libraries
+
+From the =ios-graal-jdk-21= sibling directory:
+
+#+begin_src bash
+cd ../ios-graal-jdk-21
+./build.sh
+#+end_src
+
+Outputs: =build/ios-arm64/lib/libjava.a= and =build/ios-arm64/lib/libjvm.a=.
+
+** Step 2: Build bb.o (Clojure → native-image)
+
+#+begin_src bash
+cd ../ios-graal-jdk-21
+./scripts/build-bb-o
+#+end_src
+
+Outputs: =build/bb/bb.o= and =build/bb/bb.h=.
+
+** Step 3: Build MobileTest.app
+
+#+begin_src bash
+cd ../ios-graal-jdk-21
+./scripts/build-demo-app
+#+end_src
+
+Builds an unsigned =MobileTest.app= in Xcode DerivedData using the static libs
+and =bb.o= from the previous steps.
+
+** Step 4: Sign and install on device
+
+#+begin_src bash
+cd ../ios-graal-jdk-21
+./scripts/deploy-demo-app
+#+end_src
+
+Signs the app with your "Apple Development" certificate and installs it on the
+connected device via =ios-deploy=.
+
+Signing uses =codesign= directly (not xcodebuild) because Xcode 14.3.1 cannot
+find provisioning profiles installed by Xcode 16+.
+
+* Configuration
+
+Sensitive per-developer values live in =.envrc= (loaded by [[https://direnv.net/][direnv]]):
+
+| Variable             | Description                                    |
+|----------------------+------------------------------------------------|
+| =XCODE_DEVELOPER_DIR=  | Path to Xcode 14.3.1 =Contents/Developer=      |
+| =DEVELOPMENT_TEAM=     | Apple Developer team ID                        |
+| =DEVICE_UDID=          | Connected device UDID                          |
+| =CERT_HASH=            | SHA-1 of your "Apple Development" certificate |
+| =PROFILE_UUID=         | UUID of the provisioning profile               |
+| =APPLE_KEY_ID=         | App Store Connect API key ID                   |
+| =APPLE_ISSUER_ID=      | App Store Connect issuer ID                    |
+| =APPLE_SECRET_PATH=    | Path to the =.p8= API key file                 |
+
+Find your certificate SHA-1:
+
+#+begin_src bash
+security find-identity -v -p codesigning | grep "Apple Development"
+#+end_src
+
+* Provisioning
+
+[[https://fastlane.tools/][fastlane]] manages device registration and provisioning profiles via the
+App Store Connect API.
+
+#+begin_src bash
+cd fastlane
+# Register a new device
+fastlane register_device udid:"<UDID>" name:"My iPhone"
+# Download/refresh the development provisioning profile
+fastlane sigh --development
+#+end_src
+
+The =fastlane/Fastfile= reads credentials from the environment variables in
+=.envrc=.
+
+* Simulator builds
+
+#+begin_src bash
+DESTINATION="platform=iOS Simulator,name=iPhone 15" \
+  ../ios-graal-jdk-21/scripts/build-demo-app
+#+end_src
+
+* Examples
+
+| Path              | Description           |
+|-------------------+-----------------------|
+| =examples/gol=    | Game of Life          |
+| =examples/ants=   | Classic ant sim       |
+| =examples/objc=   | Objective-C interop   |
+
+* Membrane REPL
+
+The TestSkia project starts a nREPL on the device. After building and installing:
+
+1. Open =xcode/TestSkia/TestSkia.xcodeproj= in Xcode
+2. Build and run
+3. Connect to the IP and port printed in the device console (default =23456=)
+
+#+begin_src clojure
+(require '[membrane.ui :as ui])
+(require '[com.phronemophobic.grease.membrane :refer [main-view]])
+
+(reset! main-view
+        (ui/translate 50 100
+          (ui/label "Hello from Clojure!"
+                    (ui/font nil 42))))
+#+end_src
+
+* Notes
+
+The key ingredients for iOS static binaries:
+
+- *JDK static libs* built for =iphoneos= arm64 (provided by =ios-graal-jdk-21=)
+- *SubstrateVM libs* built for =iphoneos= arm64 (also =ios-graal-jdk-21=)
+- *Gluon GraalVM* =native-image= with iOS arm64 backend
+- *GraalVM reflection/resource configs* under =conf/=
+
+* License
+
+Copyright © 2024 Adrian Smith. Distributed under the GPLv2 License.

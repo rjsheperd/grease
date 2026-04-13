@@ -1,0 +1,61 @@
+#+TITLE: Objective-C FFI examples
+
+Call Objective-C from Clojure using the [[https://github.com/phronmophobic/objcjure][objcjure]] macro.
+
+* Files
+
+- =objc.clj= — NSMutableSet, UIAlertController dialog, NSArray sort with a comparator block
+- =accelerometer.clj= — graph live accelerometer readings (requires membrane)
+
+* Usage
+
+1. Build and install MobileTest (see top-level [[../../README.org][README.org]])
+2. Note the IP/port printed to the Xcode console:
+
+   #+begin_example
+   === Clojure nREPL ===
+     Connect: 192.168.x.x:23456
+   #+end_example
+
+3. Connect from your Mac:
+
+   #+begin_src bash
+   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' \
+       -M -m nrepl.cmdline --connect --host 192.168.x.x --port 23456
+   #+end_src
+
+4. Load the example and eval top-level forms:
+
+   #+begin_src clojure
+   ;; From the nREPL
+   (load-file "/path/to/examples/objc/objc.clj")
+
+   ;; or eval individual forms:
+   (require '[com.phronemophobic.objcjure :as objcjure :refer [objc]])
+   (objc/show-alert "Hey!" "Clojure on iOS!" "Nice!")
+   #+end_src
+
+* Syntax
+
+The =objc= macro wraps an Objective-C message send:
+
+#+begin_src clojure
+;; [NSMutableArray array]
+(objc [NSMutableArray :array])
+
+;; [[UIAlertController alloc] init]
+(objc [[UIAlertController :alloc] :init])
+
+;; [vc presentViewController:alert animated:YES completion:nil]
+(objc [vc :presentViewController:animated:completion alert true nil])
+
+;; Block literal (Clojure fn → ObjC block)
+(objc (fn ^void [sender] (println "tapped")))
+#+end_src
+
+Clojure values are injected with ~unquote~:
+
+#+begin_src clojure
+(def title (objcjure/str->nsstring "Hello"))
+(objc [label :setTitle ~title :forState 0])
+#+end_src

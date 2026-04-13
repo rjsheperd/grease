@@ -18,6 +18,7 @@
     {"pattern": ".*\\.vert$"},
     {"pattern": ".*\\.obj$"},
     {"pattern": ".*\\.mtl$"},
-    {"pattern": ".*\\.js$"}
+    {"pattern": ".*\\.js$"},
+    {"pattern": ".*\\.clj$"}
   ]
 }

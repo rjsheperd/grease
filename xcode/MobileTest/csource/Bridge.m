@@ -1,138 +1,236 @@
 //
-//  Bridge.c
+//  Bridge.m
 //  MobileTest
-//
-//  Created by Adrian Smith on 6/7/21.
 //
 
 #include "Bridge.h"
-
-
-//#include "mobiletest-uber.h"
 #include "bb.h"
 #import <Foundation/Foundation.h>
 #include <objc/message.h>
-//#import "objc-runtime.h"
+#include <unistd.h>
+#include <string.h>
 
+// =============================================================================
+// Isolate / thread globals
+// =============================================================================
 
 graal_isolate_t *isolate = NULL;
 graal_isolatethread_t *thread = NULL;
 
-long long int call_sub(long long int a, long long int b){
+// =============================================================================
+// Log buffer — written by clj_log and the stdout pipe reader;
+// read by bridge_get_logs() from Swift.
+// =============================================================================
 
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
-        return 1;
-      }
-    }
+static NSMutableString *g_log_buf;
+static NSLock          *g_log_lock;
+static NSString        *g_log_snapshot; // keeps snapshot alive between Swift reads
 
-  return clj_sub(thread, a, b);
+static void bridge_init_log(void) {
+    g_log_buf   = [NSMutableString new];
+    g_log_lock  = [NSLock new];
 }
 
-
-long long int call_add(long long int a, long long int b){
-
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
-        return 1;
-      }
-    }
-
-  return clj_add(thread, a, b);
+static void bridge_append_raw(const char *msg) {
+    NSString *s = [NSString stringWithUTF8String:(msg ?: "(null)")];
+    [g_log_lock lock];
+    [g_log_buf appendString:s];
+    [g_log_buf appendString:@"\n"];
+    [g_log_lock unlock];
 }
 
-void call_print(const char* s){
-    
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
+// Called by Clojure via ffi/call (if dlsym finds it) and by Bridge functions.
+void clj_log(const char *msg) {
+    NSLog(@"[Clojure] %s", msg);
+    bridge_append_raw(msg);
+}
+
+// Snapshot the buffer and return a stable C-string pointer valid until the
+// next call to bridge_get_logs().
+const char *bridge_get_logs(void) {
+    [g_log_lock lock];
+    g_log_snapshot = [g_log_buf copy];
+    [g_log_lock unlock];
+    return [g_log_snapshot UTF8String];
+}
+
+// =============================================================================
+// Stdout pipe capture — redirects fd 1 so that Clojure's println (which writes
+// to Java System.out → fd 1) lands in the log buffer AND is mirrored back to
+// the original stdout for ios-deploy terminal output.
+// =============================================================================
+
+void bridge_setup_stdout_capture(void) {
+    bridge_init_log();
+
+    int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) {
+        NSLog(@"[Bridge] bridge_setup_stdout_capture: pipe() failed");
         return;
-      }
     }
 
-  clj_print(thread,(void*)s);
+    int tee_fd = dup(STDOUT_FILENO); // mirror to original stdout
+
+    dup2(pipe_fds[1], STDOUT_FILENO);
+    close(pipe_fds[1]);
+
+    int read_fd = pipe_fds[0];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        char buf[4096];
+        ssize_t n;
+        while ((n = read(read_fd, buf, sizeof(buf) - 1)) > 0) {
+            buf[n] = '\0';
+            // Mirror to original stdout (ios-deploy / Xcode console)
+            if (tee_fd >= 0) {
+                write(tee_fd, buf, (size_t)n);
+            }
+            // Strip trailing newlines before storing
+            while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
+                buf[--n] = '\0';
+            }
+            if (n > 0) {
+                bridge_append_raw(buf);
+            }
+        }
+    });
 }
-void call_print_hi(void){
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
+
+// =============================================================================
+// Isolate-initialising wrappers (lazy — create isolate on first call)
+// =============================================================================
+
+static int ensure_isolate(void) {
+    if (!isolate) {
+        if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
+            NSLog(@"[Bridge] graal_create_isolate failed");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+long long int call_sub(long long int a, long long int b) {
+    if (!ensure_isolate()) return 1;
+    return clj_sub(thread, a, b);
+}
+
+long long int call_add(long long int a, long long int b) {
+    if (!ensure_isolate()) return 1;
+    return clj_add(thread, a, b);
+}
+
+void call_print(const char *s) {
+    if (!ensure_isolate()) return;
+    clj_print(thread, (void *)s);
+}
+
+void call_print_hi(void) {
+    if (!ensure_isolate()) return;
+    clj_print_hi(thread);
+}
+
+long long int call_eval(const char *s) {
+    if (!ensure_isolate()) return -1;
+    return clj_eval(thread, (void *)s);
+}
+
+void call_prn(long long int id) {
+    if (!ensure_isolate()) return;
+    clj_prn(thread, id);
+}
+
+// Returns the nREPL port Clojure has bound (0 = not started yet).
+// dummy 0 arg: workaround for GraalVM not emitting IsolateEnterStub for () -> long.
+long long int call_nrepl_port(void) {
+    if (!isolate) return 0;
+    return clj_nrepl_port(thread, 0);
+}
+
+// Returns the build-time hash of grease.clj as a 64-bit int.
+// dummy 0 arg: same workaround as call_nrepl_port.
+long long int call_hash_code(void) {
+    if (!isolate) return 0;
+    return clj_get_hash_code(thread, 0);
+}
+
+void call_start_server(void) {
+    NSLog(@"[Bridge] call_start_server: entered");
+    graal_isolatethread_t *bg_thread = NULL;
+    if (graal_attach_thread(isolate, &bg_thread) != 0) {
+        NSLog(@"[Bridge] call_start_server: graal_attach_thread failed");
         return;
-      }
     }
-
-  clj_print_hi(thread);
+    clj_start_server(bg_thread);
+    NSLog(@"[Bridge] call_start_server: clj_start_server returned");
+    graal_detach_thread(bg_thread);
 }
 
-long long int call_eval(const char* s){
-    
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
-        return -1;
-      }
+void testme(void) {}
+
+// =============================================================================
+// Generic FFI callback — required by tech.v3.datatype.ffi / clj-libffi callback
+// machinery (e.g. dispatch-main-async with ObjC blocks).
+// bb.o references these as undefined symbols; defined here to satisfy the linker.
+// Adapted from TestSkia/TestSkia/MembraneView.mm.
+// =============================================================================
+
+typedef void (*operation_t)(void*, void*, void*, void*);
+
+void clj_generic_callback(void *cif, void *ret, void *args, void *userdata) {
+    if (!isolate) return;
+    long long int key = *((long long int *)userdata);
+    graal_isolatethread_t *cb_thread = graal_get_current_thread(isolate);
+    if (cb_thread) {
+        // Already attached on this OS thread — reuse it.
+        com_phronemophobic_clj_libffi_callback(cb_thread, key, ret, args);
+    } else {
+        // Not yet attached — attach, dispatch, detach.
+        graal_attach_thread(isolate, &cb_thread);
+        com_phronemophobic_clj_libffi_callback(cb_thread, key, ret, args);
+        graal_detach_thread(cb_thread);
     }
-
-    return clj_eval(thread,(void*)s);
 }
 
-void call_prn(long long int id){
-    
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
-        return;
-      }
-    }
-
-  clj_prn(thread,id);
+operation_t clj_get_generic_callback_address(void) {
+    return &clj_generic_callback;
 }
 
-void call_start_server(){
-    
-    if ( !isolate ){
-      if (graal_create_isolate(NULL, &isolate, &thread) != 0) {
-        fprintf(stderr, "initialization error\n");
-        return;
-      }
-    }
+// =============================================================================
+// JDK 21 MacOSXSocketOptions stubs (lowercase k).
+//
+// JDK 21 renamed getTcpKeepAliveProbes0 → getTcpkeepAliveProbes0 (lowercase k).
+// libjava.a (built from JDK 17 source) provides the capital-K implementations.
+// The 146 MB bb.o (compiled against JDK 21 GraalVM) generates calls with
+// lowercase k, so we forward to the existing capital-K functions.
+// =============================================================================
 
-  clj_start_server(thread);
+extern int Java_jdk_net_MacOSXSocketOptions_getTcpKeepAliveProbes0(void*, void*, int);
+extern void Java_jdk_net_MacOSXSocketOptions_setTcpKeepAliveProbes0(void*, void*, int, int);
+
+int Java_jdk_net_MacOSXSocketOptions_getTcpkeepAliveProbes0(void *env, void *obj, int fd) {
+    return Java_jdk_net_MacOSXSocketOptions_getTcpKeepAliveProbes0(env, obj, fd);
 }
 
-
-
-void testme(void){
-    
-    
+void Java_jdk_net_MacOSXSocketOptions_setTcpkeepAliveProbes0(void *env, void *obj, int fd, int value) {
+    Java_jdk_net_MacOSXSocketOptions_setTcpKeepAliveProbes0(env, obj, fd, value);
 }
-    
-long long int objc_msgSendU64(const char* s){
-    NSString* ss = @"asdfasdf";
+
+long long int objc_msgSendU64(const char *s) {
+    NSString *ss = @"asdfasdf";
     SEL sel = NSSelectorFromString([NSString stringWithUTF8String:s]);
-
-    return  ((NSUInteger (*)(id, SEL))objc_msgSend)(ss, sel);
+    return ((NSUInteger (*)(id, SEL))objc_msgSend)(ss, sel);
 }
 
-
-void* objc_make_selector(const char* s){
-    
-    SEL sel = NSSelectorFromString([NSString stringWithUTF8String:s]);
-    return (void*)sel;
-
+void *objc_make_selector(const char *s) {
+    return (void *)NSSelectorFromString([NSString stringWithUTF8String:s]);
 }
 
-void* objc_make_string(const char* s){
-    return (__bridge void *)([[NSString alloc] initWithUTF8String:s]);
+void *objc_make_string(const char *s) {
+    return (__bridge void *)[[NSString alloc] initWithUTF8String:s];
 }
 
-// function pointer
-void (*fn_ptr)(graal_isolatethread_t*);
-void call_clj_fn(void (*clj_fn_ptr)(graal_isolatethread_t*)){
-        fn_ptr = clj_fn_ptr;
+void (*fn_ptr)(graal_isolatethread_t *);
+void call_clj_fn(void (*clj_fn_ptr)(graal_isolatethread_t *)) {
+    fn_ptr = clj_fn_ptr;
     fn_ptr(thread);
 }
-
-
-

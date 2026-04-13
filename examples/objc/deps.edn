@@ -1,1 +1,2 @@
-{}
+{:deps {com.phronemophobic/objcjure   {:mvn/version "1.0"}
+        com.phronemophobic/clj-libffi {:mvn/version "1.3"}}}

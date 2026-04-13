@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/deploy-demo-app
+#
+# Sign and install the MobileTest demo app on a connected iOS device.
+# Run this after scripts/build-demo-app produces an unsigned .app.
+#
+# Signing is done manually via codesign (not xcodebuild) because Xcode 14.3.1
+# cannot find profiles installed by Xcode 16+ in ~/Library/Developer/Xcode.
+#
+# Prerequisites:
+#   1. scripts/build-demo-app completed  (unsigned .app in DerivedData)
+#   2. Development provisioning profile installed in Xcode
+#   3. Matching "Apple Development" certificate in the login keychain
+#   4. ios-deploy:  brew install ios-deploy
+#
+# Environment variables (required — set in .envrc):
+#   XCODE_DEVELOPER_DIR  Path to Xcode 14.3.1 Developer dir
+#   DEVICE_UDID          iOS device UDID
+#   CERT_HASH            SHA-1 of the "Apple Development" signing cert
+#   PROFILE_UUID         UUID of the provisioning profile
+#
+# Optional:
+#   CONFIGURATION   Debug or Release  (default: Debug)
+#
+# Usage:
+#   ./scripts/deploy-demo-app
+#   CONFIGURATION=Release ./scripts/deploy-demo-app
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_DIR="$DIR/.."   # grease root
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+CONFIGURATION="${CONFIGURATION:-Debug}"
+
+DEVICE_UDID="${DEVICE_UDID:?DEVICE_UDID not set — add it to .envrc}"
+CERT_HASH="${CERT_HASH:?CERT_HASH not set — add it to .envrc}"
+PROFILE_UUID="${PROFILE_UUID:?PROFILE_UUID not set — add it to .envrc}"
+
+XCODE_PROJECT="$PROJECT_DIR/xcode/MobileTest/MobileTest.xcodeproj"
+XCODE_SCHEME="MobileTest"
+XCODE_DEVELOPER_DIR="${XCODE_DEVELOPER_DIR:?XCODE_DEVELOPER_DIR not set — add it to .envrc}"
+XCODEBUILD="$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild"
+
+PROFILE_PATH="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+IOS_DEPLOY="/opt/homebrew/bin/ios-deploy"
+
+# =============================================================================
+# Resolve app bundle path from DerivedData
+# =============================================================================
+
+BUILT_PRODUCTS_DIR=$("$XCODEBUILD" \
+    -project       "$XCODE_PROJECT" \
+    -scheme        "$XCODE_SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -showBuildSettings 2>/dev/null \
+    | grep '^\s*BUILT_PRODUCTS_DIR' \
+    | head -1 \
+    | awk -F' = ' '{print $2}' \
+    | xargs)
+
+APP="$BUILT_PRODUCTS_DIR/MobileTest.app"
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if [ ! -d "$APP" ]; then
+    echo "ERROR: App not found at $APP"
+    echo "  Run ./scripts/build-demo-app first."
+    exit 1
+fi
+
+if [ ! -f "$PROFILE_PATH" ]; then
+    echo "ERROR: Provisioning profile not found:"
+    echo "  $PROFILE_PATH"
+    echo "  Download from developer.apple.com → Certificates, IDs & Profiles"
+    echo "  and open in Xcode to install, or set PROFILE_UUID."
+    exit 1
+fi
+
+if [ ! -x "$IOS_DEPLOY" ]; then
+    echo "ERROR: ios-deploy not found at $IOS_DEPLOY"
+    echo "  Install: brew install ios-deploy"
+    exit 1
+fi
+
+echo "  app:     $APP"
+echo "  profile: $PROFILE_UUID"
+echo "  cert:    $CERT_HASH"
+echo "  device:  $DEVICE_UDID"
+echo ""
+
+# =============================================================================
+# Step 1: Extract entitlements from the provisioning profile
+# =============================================================================
+
+echo "=== Step 1: Extracting entitlements ==="
+
+ENTITLEMENTS="/tmp/MobileTest-entitlements.plist"
+PROFILE_PLIST="/tmp/MobileTest-profile.plist"
+
+security cms -D -i "$PROFILE_PATH" -o "$PROFILE_PLIST"
+/usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$PROFILE_PLIST" > "$ENTITLEMENTS"
+
+echo "  application-identifier: $( \
+    /usr/libexec/PlistBuddy -c "Print :application-identifier" "$ENTITLEMENTS" 2>/dev/null)"
+echo "  team: $( \
+    /usr/libexec/PlistBuddy -c "Print :com.apple.developer.team-identifier" "$ENTITLEMENTS" 2>/dev/null)"
+
+# =============================================================================
+# Step 2: Embed provisioning profile and sign
+# =============================================================================
+
+echo ""
+echo "=== Step 2: Signing $CONFIGURATION build ==="
+
+rm -rf "$APP/_CodeSignature" "$APP/MobileTest.cstemp"
+cp "$PROFILE_PATH" "$APP/embedded.mobileprovision"
+echo "  embedded: $APP/embedded.mobileprovision"
+
+codesign \
+    --force \
+    --sign "$CERT_HASH" \
+    --entitlements "$ENTITLEMENTS" \
+    --timestamp=none \
+    "$APP"
+
+echo "  signed:  $APP"
+codesign --verify --verbose "$APP"
+echo ""
+
+# =============================================================================
+# Step 3: Install on device
+# =============================================================================
+
+echo "=== Step 3: Installing on device $DEVICE_UDID ==="
+
+"$IOS_DEPLOY" \
+    --bundle "$APP" \
+    --id     "$DEVICE_UDID" \
+    --no-wifi
+
+echo ""
+echo "================================================================"
+echo "  MobileTest installed successfully"
+echo "================================================================"
+echo ""
+echo "  Device: $DEVICE_UDID"
+echo "  App:    $APP"
+echo ""
+echo "  Next: ./scripts/debug-demo-app"
+echo ""

@@ -34,3 +34,28 @@ project.xcworkspace
 
 *.mp4
 *.gif
+
+# Secrets — copy .envrc.example → .envrc and fill in your values
+.envrc
+
+# Claude Code session memory
+.claude/
+
+# GraalVM installation (symlinked or copied locally)
+graal/
+xcode/MobileTest/graalvm
+xcode/MobileTest/staticjdk
+
+# Generated native-image headers (produced by build-bb-o)
+bb_dynamic.h
+grease-uber.h
+grease-uber_dynamic.h
+graal_isolate_dynamic.h
+flags.txt
+
+# Large pre-built iOS JDK static lib archives (25 MB+)
+# The small ios-arm64/ libs (libjava.a, libjvm.a, libios_jdk_stubs.a) are
+# checked in because they are needed by build-demo-app when ios-graal-jdk-21
+# is not present as a sibling repo.
+lib/ios-arm64-jdk-17/
+lib/ios-arm64-jdk-21/

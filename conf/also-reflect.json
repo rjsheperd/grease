@@ -1,0 +1,12 @@
+  {
+    "name" : "tech.v3.datatype.ffi__init",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },
+  {
+    "name" : "tech.v3.datatype.ffi.graalvm__init",
+    "allPublicMethods" : true,
+    "allPublicFields" : true,
+    "allPublicConstructors" : true
+  },

@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/build-bb-o
+#
+# Compile Clojure sources → uberjar → bb.o (iOS arm64 relocatable object).
+# Ported from ios-graal-jdk-21/scripts/build-bb-o; runs self-contained from
+# the grease repo root.
+#
+# Outputs:
+#   build/bb/bb.o              — relocatable iOS arm64 object (~111MB)
+#   build/bb/bb.h              — C header for all Clojure entry points
+#   build/bb/graal_isolate.h   — GraalVM isolate/thread management API
+#   build/bb/ios-link.xcconfig — xcconfig with library paths + linker flags
+#
+# Prerequisites:
+#   - GraalVM Gluon with iOS platform support (auto-detected, see below)
+#   - clojure CLI  https://clojure.org/guides/install_clojure
+#   - ios-graal-jdk-21 sibling repo built (build/ios-arm64/lib/)
+#     OR set IOS_GRAAL_LIBS / IOS_GRAAL_STATIC explicitly
+#
+# Environment variables:
+#   GRAALVM_HOME    GraalVM Gluon home (auto-detected from grease/graal/ or ~/.graal/latest)
+#   IOS_GRAAL_HOME  Path to ios-graal-jdk-21 repo root
+#                   Default: ../ios-graal-jdk-21 (sibling directory)
+#   IOS_GRAAL_LIBS  Path to directory containing libjava.a / libjvm.a
+#                   Default: $IOS_GRAAL_HOME/build/ios-arm64/lib
+#   IOS_GRAAL_STATIC Path to directory containing static JDK libs
+#                   Default: $IOS_GRAAL_HOME/build/ios-arm64/static
+#   UBERJAR_TARGET  build alias  (default: uberjar-basic)
+#   IOS_TARGET      iOS deployment target  (default: 16.0)
+#   USE_CAP_CACHE   "use" reuses existing CAPCache  (default: "new")
+#
+# Usage:
+#   ./scripts/build-bb-o
+#   USE_CAP_CACHE=use ./scripts/build-bb-o          # faster subsequent builds
+#   GRAALVM_HOME=/path/to/gluon ./scripts/build-bb-o
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_DIR="$DIR/.."   # grease root
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+IOS_GRAAL_HOME="${IOS_GRAAL_HOME:-$PROJECT_DIR/../ios-graal-jdk-21}"
+IOS_GRAAL_SRC_LIBS="$IOS_GRAAL_HOME/build/ios-arm64/lib"
+IOS_GRAAL_STATIC="${IOS_GRAAL_STATIC:-$IOS_GRAAL_HOME/build/ios-arm64/static}"
+
+# Local lib dir — libs are synced here from ios-graal-jdk-21 and referenced
+# by xcconfig / build-demo-app so the grease repo is self-contained.
+LOCAL_LIBS_DIR="$PROJECT_DIR/lib/ios-arm64"
+
+UBERJAR_TARGET="${UBERJAR_TARGET:-uberjar-basic}"
+IOS_TARGET="${IOS_TARGET:-16.0}"
+USE_CAP_CACHE="${USE_CAP_CACHE:-new}"
+
+OUT_DIR="$PROJECT_DIR/build/bb"
+TMP_DIR="$PROJECT_DIR/build/bb-tmp"
+
+REFLECTION_CFG="$PROJECT_DIR/conf/reflectionconfig-arm64-ios.json"
+JNI_CFG="$PROJECT_DIR/conf/jniconfig-arm64-ios.json"
+RESOURCE_CFG="$PROJECT_DIR/conf/resourceconfig-arm64-ios.json"
+CAP_CACHE_DIR="$PROJECT_DIR/conf/capcache"
+
+UBER_JAR="$PROJECT_DIR/target/grease-uber.jar"
+
+# =============================================================================
+# GraalVM auto-detect
+# =============================================================================
+
+if [ -z "${GRAALVM_HOME:-}" ]; then
+    for candidate in \
+        "$PROJECT_DIR/graal/graalvm-java23-darwin-aarch64-gluon-23+25.1-dev/Contents/Home" \
+        "$HOME/.graal/latest/Contents/Home"; do
+        if [ -x "$candidate/bin/native-image" ]; then
+            GRAALVM_HOME="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "${GRAALVM_HOME:-}" ]; then
+    echo "ERROR: GRAALVM_HOME is not set and no GraalVM Gluon was found."
+    echo "  Download from: https://github.com/gluonhq/graal/releases"
+    echo "  Then: GRAALVM_HOME=/path/to/gluon/Contents/Home ./scripts/build-bb-o"
+    exit 1
+fi
+
+NATIVE_IMAGE="$GRAALVM_HOME/bin/native-image"
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if [ ! -f "$IOS_GRAAL_SRC_LIBS/libjava.a" ] || [ ! -f "$IOS_GRAAL_SRC_LIBS/libjvm.a" ]; then
+    echo "ERROR: ios-graal-jdk-21 libraries not found at $IOS_GRAAL_SRC_LIBS"
+    echo "  Run ios-graal-jdk-21/build.sh first, or set IOS_GRAAL_HOME."
+    exit 1
+fi
+
+if [ ! -x "$NATIVE_IMAGE" ]; then
+    echo "ERROR: native-image not found at $NATIVE_IMAGE"
+    exit 1
+fi
+
+if ! command -v clojure >/dev/null 2>&1; then
+    echo "ERROR: clojure CLI not found."
+    echo "  Install from: https://clojure.org/guides/install_clojure"
+    exit 1
+fi
+
+for cfg in "$REFLECTION_CFG" "$JNI_CFG" "$RESOURCE_CFG"; do
+    if [ ! -f "$cfg" ]; then
+        echo "ERROR: config file not found: $cfg"
+        exit 1
+    fi
+done
+
+echo "  GraalVM:      $GRAALVM_HOME"
+echo "  Lib source:   $IOS_GRAAL_SRC_LIBS"
+echo "  Local libs:   $LOCAL_LIBS_DIR"
+echo "  Static libs:  $IOS_GRAAL_STATIC"
+"$NATIVE_IMAGE" --version 2>/dev/null | head -1 || true
+echo ""
+
+# =============================================================================
+# Sync libs: ios-graal-jdk-21/build/ios-arm64/lib/ → lib/ios-arm64/
+# =============================================================================
+#
+# Copies libjava.a, libjvm.a, libios_jdk_stubs.a if the source is newer than
+# the local copy (or the local copy is missing). After this step all xcconfig
+# and build-demo-app references use LOCAL_LIBS_DIR so the grease repo is
+# self-contained and doesn't depend on sibling-repo paths at link time.
+
+echo "=== Syncing libs from ios-graal-jdk-21 ==="
+
+mkdir -p "$LOCAL_LIBS_DIR"
+
+for lib in libjava.a libjvm.a libios_jdk_stubs.a; do
+    src="$IOS_GRAAL_SRC_LIBS/$lib"
+    dst="$LOCAL_LIBS_DIR/$lib"
+    if [ -f "$src" ]; then
+        if [ ! -f "$dst" ] || [ "$src" -nt "$dst" ]; then
+            cp "$src" "$dst"
+            echo "  copied:     lib/ios-arm64/$lib ($(du -sh "$dst" | cut -f1))"
+        else
+            echo "  up-to-date: lib/ios-arm64/$lib"
+        fi
+    fi
+done
+echo ""
+
+# =============================================================================
+# Step 1: Compile Clojure → uberjar
+# =============================================================================
+
+echo "=== Step 1: Building uberjar ($UBERJAR_TARGET) ==="
+
+cd "$PROJECT_DIR"
+JAVA_HOME="$GRAALVM_HOME" clojure -T:build "$UBERJAR_TARGET"
+
+if [ ! -f "$UBER_JAR" ]; then
+    echo "ERROR: $UBER_JAR not produced. Check build.clj output above."
+    exit 1
+fi
+
+echo "  uberjar: $UBER_JAR ($(du -sh "$UBER_JAR" | cut -f1))"
+
+# =============================================================================
+# Step 2: native-image → bb.o
+# =============================================================================
+
+echo ""
+echo "=== Step 2: native-image → iOS arm64 relocatable object ==="
+echo "  Started: $(date)"
+echo "  Use USE_CAP_CACHE=use to speed up subsequent rebuilds."
+
+mkdir -p "$TMP_DIR" "$OUT_DIR" "$CAP_CACHE_DIR"
+
+if [ "$USE_CAP_CACHE" = "use" ]; then
+    CAP_FLAG="-H:+UseCAPCache"
+else
+    CAP_FLAG="-H:+NewCAPCache"
+fi
+
+# Force build-time init for ham_fisted $reify classes — GraalVM 23+ reclassifies
+# them as run-time even when their package is in --initialize-at-build-time,
+# causing contradictions with build-time heap snapshots.
+HF_REIFY_BT=$(unzip -l "$UBER_JAR" | grep '\$reify' | grep 'ham_fisted' | \
+    awk '{print $4}' | \
+    sed 's|/|.|g; s|\.class$|:build_time|' | \
+    tr '\n' ',' | sed 's|,*$||')
+echo "  Forcing build-time init for $(echo "$HF_REIFY_BT" | tr ',' '\n' | wc -l | tr -d ' ') ham_fisted reify classes"
+
+time "$NATIVE_IMAGE" \
+    --no-fallback \
+    -H:+UnlockExperimentalVMOptions \
+    -H:+AllowIncompleteClasspath \
+    --report-unsupported-elements-at-runtime \
+    --initialize-at-build-time=clojure,clj_commons,com.phronemophobic,edamame,edamame.impl,babashka,bencode,ham_fisted,insn,sci,tech.v3,tech.v3.datatype,tech.v3.datatype.ffi,"ham_fisted.ParallelOptions\$CatParallelism" \
+    --initialize-at-run-time=com.phronemophobic.grease.interface \
+    -H:ClassInitialization="$HF_REIFY_BT" \
+    -H:Name=bb \
+    -H:Path="$OUT_DIR" \
+    -H:+ExitAfterRelocatableImageWrite \
+    -H:+SharedLibrary \
+    -H:+AddAllCharsets \
+    -H:+ReportExceptionStackTraces \
+    -H:-DeadlockWatchdogExitOnTimeout \
+    -H:DeadlockWatchdogInterval=0 \
+    -H:+RemoveSaturatedTypeFlows \
+    -H:-SpawnIsolates \
+    -H:PageSize=16384 \
+    -H:EnableURLProtocols=http,https \
+    -Djdk.internal.lambda.eagerlyInitialize=false \
+    -H:TempDirectory="$TMP_DIR" \
+    -H:ReflectionConfigurationFiles="$REFLECTION_CFG" \
+    -H:JNIConfigurationFiles="$JNI_CFG" \
+    -H:ResourceConfigurationFiles="$RESOURCE_CFG" \
+    -J-Xmx8G \
+    -J-XX:MaxDirectMemorySize=2G \
+    -J-Ddebug.jdk.graal.jvmciConfigCheck=ignore \
+    -J-Dclojure.spec.skip-macros=true \
+    -J-Dclojure.compiler.direct-linking=true \
+    -J-Dtech.v3.datatype.graal-native=true \
+    -Dsvm.targetName=iOS \
+    -Dsvm.targetArch=arm64 \
+    "$CAP_FLAG" \
+    -H:CAPCacheDir="$CAP_CACHE_DIR" \
+    -H:CompilerBackend=lir \
+    "-Dsvm.platform=org.graalvm.nativeimage.Platform\$IOS_AARCH64" \
+    -jar "$UBER_JAR"
+
+echo "  Completed: $(date)"
+
+# Copy bb.o out of the SVM-* temp subdir
+OBJ=$(find "$TMP_DIR" -maxdepth 2 -name "bb.o" 2>/dev/null | head -1)
+if [ -z "$OBJ" ]; then
+    OBJ=$(find "$TMP_DIR" -maxdepth 2 -name "grease-uber.o" 2>/dev/null | head -1)
+fi
+if [ -n "$OBJ" ]; then
+    cp "$OBJ" "$OUT_DIR/bb.o"
+fi
+
+if [ ! -f "$OUT_DIR/bb.o" ]; then
+    echo "ERROR: bb.o not found after native-image. Check output above."
+    exit 1
+fi
+
+echo "  bb.o: $OUT_DIR/bb.o ($(du -sh "$OUT_DIR/bb.o" | cut -f1))"
+
+# Alias grease-uber.h → bb.h so Bridge.m's #include "bb.h" resolves correctly.
+# native-image names headers after the jar (grease-uber.jar → grease-uber.h),
+# not after -H:Name=bb which only affects the object file.
+for pair in "grease-uber.h:bb.h" "grease-uber_dynamic.h:bb_dynamic.h"; do
+    src="$OUT_DIR/${pair%%:*}"
+    dst="$OUT_DIR/${pair##*:}"
+    if [ -f "$src" ] && [ ! -f "$dst" -o "$src" -nt "$dst" ]; then
+        cp "$src" "$dst"
+    fi
+done
+
+# =============================================================================
+# Step 3: Write ios-link.xcconfig
+# =============================================================================
+
+echo ""
+echo "=== Step 3: Writing ios-link.xcconfig ==="
+
+XCCONFIG="$OUT_DIR/ios-link.xcconfig"
+
+OTHER_LDFLAGS="-ljava"                   # net + nio + extnet bundled in ios-graal-jdk-21's libjava.a
+OTHER_LDFLAGS+=" -ljvm"                  # libdarwin + liblibchelper + JvmFuncsFallbacks bundled
+OTHER_LDFLAGS+=" -lios_jdk_stubs"
+OTHER_LDFLAGS+=" -lzip -lprefs -lj2pkcs11"
+OTHER_LDFLAGS+=" -lz -ldl -lstdc++ -lpthread"
+OTHER_LDFLAGS+=" -Wl,-framework,Foundation"
+OTHER_LDFLAGS+=" -Wl,-framework,UIKit"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreGraphics"
+OTHER_LDFLAGS+=" -Wl,-framework,MobileCoreServices"
+OTHER_LDFLAGS+=" -Wl,-framework,OpenGLES"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreText"
+OTHER_LDFLAGS+=" -Wl,-framework,QuartzCore"
+OTHER_LDFLAGS+=" -Wl,-framework,ImageIO"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreBluetooth"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreImage"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreLocation"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMedia"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMotion"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreVideo"
+OTHER_LDFLAGS+=" -Wl,-framework,Accelerate"
+OTHER_LDFLAGS+=" -Wl,-framework,AVFoundation"
+OTHER_LDFLAGS+=" -Wl,-framework,AudioToolbox"
+OTHER_LDFLAGS+=" -Wl,-framework,MediaPlayer"
+OTHER_LDFLAGS+=" -Wl,-framework,UserNotifications"
+OTHER_LDFLAGS+=" -Wl,-framework,ARKit"
+OTHER_LDFLAGS+=" -Wl,-framework,AVKit"
+OTHER_LDFLAGS+=" -Wl,-framework,SceneKit"
+OTHER_LDFLAGS+=" -Wl,-framework,StoreKit"
+OTHER_LDFLAGS+=" -Wl,-framework,ModelIO"
+OTHER_LDFLAGS+=" -Wl,-framework,WebKit"
+OTHER_LDFLAGS+=" -L$LOCAL_LIBS_DIR"
+OTHER_LDFLAGS+=" -L$IOS_GRAAL_STATIC"
+
+GREASE_IOS_STATIC="$PROJECT_DIR/build/staticjdk-ios-jdk21/lib/static"
+if [ -d "$GREASE_IOS_STATIC" ]; then
+    OTHER_LDFLAGS+=" -L$GREASE_IOS_STATIC"
+fi
+
+cat > "$XCCONFIG" << EOF
+// ios-link.xcconfig — generated by grease/scripts/build-bb-o — do not edit manually
+
+IPHONEOS_DEPLOYMENT_TARGET = $IOS_TARGET
+
+LIBRARY_SEARCH_PATHS = \$(inherited) $LOCAL_LIBS_DIR $IOS_GRAAL_STATIC $OUT_DIR
+
+OTHER_LDFLAGS = \$(inherited) $OTHER_LDFLAGS
+EOF
+
+echo "  xcconfig: $XCCONFIG"
+
+# =============================================================================
+# Done
+# =============================================================================
+
+echo ""
+echo "================================================================"
+echo "  build-bb-o complete"
+echo "================================================================"
+echo ""
+echo "  bb.o:     $OUT_DIR/bb.o"
+echo "  bb.h:     $OUT_DIR/bb.h"
+echo "  xcconfig: $OUT_DIR/ios-link.xcconfig"
+echo ""
+echo "  Next: ./scripts/build-demo-app"
+echo ""
+echo "  Faster subsequent builds:"
+echo "    USE_CAP_CACHE=use ./scripts/build-bb-o"
+echo ""

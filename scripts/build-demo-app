@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/build-demo-app
+#
+# Build the MobileTest iOS app via xcodebuild CLI.
+# Ported from ios-graal-jdk-21/scripts/build-demo-app; runs self-contained
+# from the grease repo root.
+#
+# Prerequisites:
+#   1. scripts/build-bb-o  (build/bb/bb.o and build/bb/bb.h)
+#   2. ios-graal-jdk-21 sibling repo built  (build/ios-arm64/lib/)
+#   3. Xcode 14.3.1 active  (sudo xcode-select -s /path/to/Xcode-14.3.1.app)
+#
+# Environment variables:
+#   XCODE_DEVELOPER_DIR  Path to Xcode 14.3.1 Developer dir  (required — set in .envrc)
+#   DEVELOPMENT_TEAM     Apple Developer team ID  (required — set in .envrc)
+#   IOS_GRAAL_HOME       Path to ios-graal-jdk-21 repo root
+#                        Default: ../ios-graal-jdk-21 (sibling)
+#   IOS_TARGET           iOS deployment target  (default: 16.0)
+#   CONFIGURATION        Debug or Release  (default: Debug)
+#   DESTINATION          xcodebuild -destination  (default: generic/platform=iOS)
+#
+# Usage:
+#   ./scripts/build-demo-app
+#   CONFIGURATION=Release ./scripts/build-demo-app
+#   DESTINATION="platform=iOS Simulator,name=iPhone 15" ./scripts/build-demo-app
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_DIR="$DIR/.."   # grease root
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+IOS_GRAAL_HOME="${IOS_GRAAL_HOME:-$PROJECT_DIR/../ios-graal-jdk-21}"
+IOS_GRAAL_STATIC="${IOS_GRAAL_STATIC:-$IOS_GRAAL_HOME/build/ios-arm64/static}"
+
+# Synced by build-bb-o — self-contained local copy of libjava.a / libjvm.a / libios_jdk_stubs.a
+LOCAL_LIBS_DIR="${IOS_GRAAL_LIBS:-$PROJECT_DIR/lib/ios-arm64}"
+
+# iOS-targeted JDK static libs built by grease/scripts/build-ios-static-libs
+GREASE_IOS_STATIC="$PROJECT_DIR/build/staticjdk-ios-jdk21/lib/static"
+
+BB_DIR="$PROJECT_DIR/build/bb"
+
+XCODE_PROJECT="$PROJECT_DIR/xcode/MobileTest/MobileTest.xcodeproj"
+XCODE_SCHEME="MobileTest"
+
+IOS_TARGET="${IOS_TARGET:-16.0}"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+DESTINATION="${DESTINATION:-generic/platform=iOS}"
+DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:?DEVELOPMENT_TEAM not set — add it to .envrc}"
+
+XCODE_DEVELOPER_DIR="${XCODE_DEVELOPER_DIR:?XCODE_DEVELOPER_DIR not set — add it to .envrc}"
+XCODEBUILD="$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild"
+XCODE14_CLANG="$XCODE_DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+
+XCCONFIG="$PROJECT_DIR/build/demo-app.xcconfig"
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if [ ! -f "$LOCAL_LIBS_DIR/libjava.a" ] || [ ! -f "$LOCAL_LIBS_DIR/libjvm.a" ]; then
+    echo "ERROR: local libs not found at $LOCAL_LIBS_DIR"
+    echo "  Run ./scripts/build-bb-o first (it syncs libs from ios-graal-jdk-21)."
+    exit 1
+fi
+
+if [ ! -f "$BB_DIR/bb.o" ]; then
+    echo "ERROR: $BB_DIR/bb.o not found."
+    echo "  Run ./scripts/build-bb-o first."
+    exit 1
+fi
+
+if [ ! -f "$BB_DIR/bb.h" ]; then
+    echo "ERROR: $BB_DIR/bb.h not found."
+    echo "  Run ./scripts/build-bb-o first."
+    exit 1
+fi
+
+if [ ! -d "$XCODE_PROJECT" ]; then
+    echo "ERROR: Xcode project not found at $XCODE_PROJECT"
+    exit 1
+fi
+
+ACTIVE_XCODE=$(xcode-select -p 2>/dev/null)
+if [ "$ACTIVE_XCODE" != "$XCODE_DEVELOPER_DIR" ]; then
+    echo "ERROR: xcode-select points at: $ACTIVE_XCODE"
+    echo "  This build requires Xcode at: $XCODE_DEVELOPER_DIR"
+    echo "  Fix: sudo xcode-select -s ${XCODE_DEVELOPER_DIR%/Contents/Developer}"
+    exit 1
+fi
+
+echo "  bb.o:        $BB_DIR/bb.o ($(du -sh "$BB_DIR/bb.o" | cut -f1))"
+echo "  local libs:  $LOCAL_LIBS_DIR"
+echo "  static libs: $IOS_GRAAL_STATIC"
+echo "  config:      $CONFIGURATION"
+echo "  destination: $DESTINATION"
+echo ""
+
+# =============================================================================
+# Step 1: Stage bb.o and headers
+# =============================================================================
+#
+# MobileTest.xcodeproj references bb.o at ../../library/build/out/bb.o
+# relative to the .xcodeproj, i.e. $PROJECT_DIR/library/build/out/bb.o.
+# Symlink so the existing Xcode project continues to work without editing.
+
+echo "=== Step 1: Staging bb.o and headers ==="
+
+GREASE_LIBRARY_OUT="$PROJECT_DIR/library/build/out"
+GREASE_LIBRARY="$PROJECT_DIR/library"
+
+mkdir -p "$GREASE_LIBRARY_OUT"
+
+ln -snf "$BB_DIR/bb.o" "$GREASE_LIBRARY_OUT/bb.o"
+echo "  symlinked: $GREASE_LIBRARY_OUT/bb.o -> $BB_DIR/bb.o"
+
+for header in bb.h bb_dynamic.h graal_isolate.h graal_isolate_dynamic.h; do
+    if [ -f "$BB_DIR/$header" ]; then
+        ln -snf "$BB_DIR/$header" "$GREASE_LIBRARY/$header"
+        echo "  symlinked: $GREASE_LIBRARY/$header -> $BB_DIR/$header"
+    fi
+done
+
+# =============================================================================
+# Step 2: Write demo-app.xcconfig
+# =============================================================================
+
+echo ""
+echo "=== Step 2: Writing demo-app.xcconfig ==="
+
+mkdir -p "$PROJECT_DIR/build"
+
+OTHER_LDFLAGS="-ljava"           # net + nio + extnet bundled in ios-graal-jdk-21's libjava.a
+OTHER_LDFLAGS+=" -ljvm"          # libdarwin + liblibchelper + JvmFuncsFallbacks bundled
+OTHER_LDFLAGS+=" -lios_jdk_stubs"
+OTHER_LDFLAGS+=" -lzip -lprefs -lj2pkcs11"
+OTHER_LDFLAGS+=" -lffi"          # libffi — required by tech.v3.datatype.ffi callback machinery
+OTHER_LDFLAGS+=" -lz -ldl -lstdc++ -lpthread"
+OTHER_LDFLAGS+=" -Wl,-framework,Foundation"
+OTHER_LDFLAGS+=" -Wl,-framework,UIKit"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreGraphics"
+OTHER_LDFLAGS+=" -Wl,-framework,MobileCoreServices"
+OTHER_LDFLAGS+=" -Wl,-framework,OpenGLES"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreText"
+OTHER_LDFLAGS+=" -Wl,-framework,QuartzCore"
+OTHER_LDFLAGS+=" -Wl,-framework,ImageIO"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreBluetooth"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreImage"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreLocation"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMedia"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMotion"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreVideo"
+OTHER_LDFLAGS+=" -Wl,-framework,Accelerate"
+OTHER_LDFLAGS+=" -Wl,-framework,AVFoundation"
+OTHER_LDFLAGS+=" -Wl,-framework,AudioToolbox"
+OTHER_LDFLAGS+=" -Wl,-framework,MediaPlayer"
+OTHER_LDFLAGS+=" -Wl,-framework,UserNotifications"
+OTHER_LDFLAGS+=" -Wl,-framework,ARKit"
+OTHER_LDFLAGS+=" -Wl,-framework,AVKit"
+OTHER_LDFLAGS+=" -Wl,-framework,SceneKit"
+OTHER_LDFLAGS+=" -Wl,-framework,StoreKit"
+OTHER_LDFLAGS+=" -Wl,-framework,ModelIO"
+OTHER_LDFLAGS+=" -Wl,-framework,WebKit"
+# libffi — bundled with the Xcode project at aarch64-apple-ios/.libs/libffi.a
+LIBFFI_DIR="$XCODE_PROJECT/../aarch64-apple-ios/.libs"
+
+# Search order:
+#   1. LOCAL_LIBS_DIR — iOS-tagged libjava.a / libjvm.a / libios_jdk_stubs.a
+#   2. GREASE_IOS_STATIC — iOS-tagged libzip.a / libprefs.a / libj2pkcs11.a
+#   3. LIBFFI_DIR — iOS-tagged libffi.a (platform 2, for -lffi in OTHER_LDFLAGS)
+# ios-graal-jdk-21/static is intentionally excluded — those libs are macOS-tagged
+# and would cause "building for iOS, but linking in object built for macOS" errors.
+OTHER_LDFLAGS+=" -L$LOCAL_LIBS_DIR"
+if [ -d "$GREASE_IOS_STATIC" ]; then
+    OTHER_LDFLAGS+=" -L$GREASE_IOS_STATIC"
+fi
+if [ -d "$LIBFFI_DIR" ]; then
+    OTHER_LDFLAGS+=" -L$LIBFFI_DIR"
+fi
+
+cat > "$XCCONFIG" << EOF
+// demo-app.xcconfig — generated by grease/scripts/build-demo-app — do not edit manually
+
+IPHONEOS_DEPLOYMENT_TARGET = $IOS_TARGET
+
+CC = $XCODE14_CLANG
+CXX = ${XCODE14_CLANG}++
+
+LIBRARY_SEARCH_PATHS = $LOCAL_LIBS_DIR $GREASE_IOS_STATIC $BB_DIR $LIBFFI_DIR
+
+HEADER_SEARCH_PATHS = \$(inherited) $BB_DIR
+
+OTHER_LDFLAGS = $OTHER_LDFLAGS
+
+EXCLUDED_SOURCE_FILE_NAMES = JvmFuncsFallbacks.c
+
+CODE_SIGNING_REQUIRED = NO
+CODE_SIGNING_ALLOWED = NO
+EOF
+
+echo "  xcconfig: $XCCONFIG"
+
+# =============================================================================
+# Step 3: Build with xcodebuild
+# =============================================================================
+
+echo ""
+echo "=== Step 3: xcodebuild $XCODE_SCHEME ($CONFIGURATION) ==="
+echo "  Destination: $DESTINATION"
+echo "  Started: $(date)"
+
+export DEVELOPER_DIR="$XCODE_DEVELOPER_DIR"
+
+"$XCODEBUILD" \
+    -project       "$XCODE_PROJECT" \
+    -scheme        "$XCODE_SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -destination   "$DESTINATION" \
+    -xcconfig      "$XCCONFIG" \
+    -UseModernBuildSystem=NO \
+    -allowProvisioningUpdates \
+    CC="$XCODE14_CLANG" \
+    CXX="${XCODE14_CLANG}++" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+
+echo "  Finished: $(date)"
+
+# =============================================================================
+# Report output
+# =============================================================================
+
+BUILT_PRODUCTS_DIR=$("$XCODEBUILD" \
+    -project       "$XCODE_PROJECT" \
+    -scheme        "$XCODE_SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -showBuildSettings 2>/dev/null \
+    | grep '^\s*BUILT_PRODUCTS_DIR' \
+    | head -1 \
+    | awk -F' = ' '{print $2}' \
+    | xargs)
+
+echo ""
+echo "================================================================"
+echo "  Demo app build complete"
+echo "================================================================"
+echo ""
+if [ -n "$BUILT_PRODUCTS_DIR" ] && [ -d "$BUILT_PRODUCTS_DIR" ]; then
+    echo "  App bundle:"
+    ls "$BUILT_PRODUCTS_DIR"/*.app 2>/dev/null | sed 's/^/    /'
+fi
+echo ""
+echo "  Next: ./scripts/deploy-demo-app"
+echo ""

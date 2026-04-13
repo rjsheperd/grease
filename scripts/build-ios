@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# =============================================================================
+# build-ios
+#
+# Full command-line build of the grease project for iOS arm64 (iOS 16+, JDK 21).
+# Does NOT require opening Xcode. Uses xcodebuild CLI for the final link step.
+#
+# Prerequisites:
+#   1. Run scripts/build-ios-static-libs first (one-time, ~1-2hrs)
+#   2. Xcode + Command Line Tools installed
+#   3. clojure CLI installed (https://clojure.org/guides/install_clojure)
+#
+# Environment variables (all optional):
+#   GRAALVM_HOME   Path to GraalVM Gluon installation
+#                  Default: graal/graalvm-java23-darwin-aarch64-gluon-23+25.1-dev/Contents/Home
+#   IOS_TARGET     iOS deployment target version (default: 16.0)
+#   CONFIGURATION  Xcode build configuration: Debug or Release (default: Debug)
+#   USE_CAP_CACHE  Set to "use" to reuse existing CAPCache (faster rebuilds)
+#                  Default: "new" (rebuilds cache from scratch)
+#
+# Usage:
+#   ./scripts/build-ios
+#   CONFIGURATION=Release ./scripts/build-ios
+#   USE_CAP_CACHE=use ./scripts/build-ios   # faster subsequent builds
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_DIR="$DIR/.."
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+GRAALVM_HOME="${GRAALVM_HOME:-$PROJECT_DIR/graal/graalvm-java23-darwin-aarch64-gluon-23+25.1-dev/Contents/Home}"
+NATIVE_IMAGE="$GRAALVM_HOME/bin/native-image"
+
+CLIBRARIES_DIR="$PROJECT_DIR/lib/ios-arm64-jdk-21"
+STATICJDK_DIR="$PROJECT_DIR/build/staticjdk-ios-jdk21"
+
+IOS_TARGET="${IOS_TARGET:-16.0}"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+USE_CAP_CACHE="${USE_CAP_CACHE:-new}"
+
+XCODE_PROJECT="$PROJECT_DIR/xcode/MobileTest/MobileTest.xcodeproj"
+XCODE_SCHEME="MobileTest"
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if [ ! -x "$NATIVE_IMAGE" ]; then
+    echo "ERROR: native-image not found at $NATIVE_IMAGE"
+    echo "  Set GRAALVM_HOME to a Gluon GraalVM build that supports iOS."
+    echo "  Download from: https://github.com/gluonhq/graal/releases"
+    exit 1
+fi
+
+echo "GraalVM: $GRAALVM_HOME"
+"$NATIVE_IMAGE" --version 2>/dev/null | grep "native-image" || true
+
+if ! command -v clojure >/dev/null 2>&1; then
+    echo "ERROR: clojure CLI not found."
+    echo "  Install from: https://clojure.org/guides/install_clojure"
+    exit 1
+fi
+
+if ! command -v xcodebuild >/dev/null 2>&1; then
+    echo "ERROR: xcodebuild not found."
+    echo "  Install Xcode Command Line Tools: xcode-select --install"
+    exit 1
+fi
+
+if [ ! -f "$CLIBRARIES_DIR/libjvm.a" ]; then
+    echo "ERROR: $CLIBRARIES_DIR/libjvm.a not found."
+    echo "  Run scripts/build-ios-static-libs first."
+    exit 1
+fi
+
+if [ ! -d "$STATICJDK_DIR/lib/static" ]; then
+    echo "ERROR: $STATICJDK_DIR/lib/static not found."
+    echo "  Run scripts/build-ios-static-libs first."
+    exit 1
+fi
+
+if [ ! -f "$CLIBRARIES_DIR/libdarwin.a" ] || [ ! -f "$CLIBRARIES_DIR/liblibchelper.a" ]; then
+    echo "ERROR: Missing clibraries in $CLIBRARIES_DIR"
+    echo "  Expected: libdarwin.a, liblibchelper.a, libjvm.a"
+    echo "  libdarwin.a and liblibchelper.a can be copied from:"
+    echo "    graal/graalvm-java23-darwin-aarch64-gluon-23+25.1-dev/Contents/Home/lib/svm/clibraries/darwin-aarch64/"
+    exit 1
+fi
+
+echo "Prerequisites OK."
+
+# =============================================================================
+# Step 1: Compile Clojure → uberjar
+# =============================================================================
+
+echo ""
+echo "=== Step 1: Compiling Clojure → uberjar ==="
+
+cd "$PROJECT_DIR"
+
+JAVA_HOME="$GRAALVM_HOME" \
+    clojure -T:build uberjar-basic
+
+UBER_JAR="target/grease-uber.jar"
+if [ ! -f "$UBER_JAR" ]; then
+    echo "ERROR: $UBER_JAR not produced. Check build.clj output above."
+    exit 1
+fi
+
+echo "uberjar: $UBER_JAR ($(du -sh "$UBER_JAR" | cut -f1))"
+
+# =============================================================================
+# Step 2: native-image → bb.o (iOS arm64 relocatable object)
+# =============================================================================
+
+echo ""
+echo "=== Step 2: Running native-image for iOS arm64 ==="
+echo "  This takes several minutes to hours depending on your machine."
+echo "  Started at: $(date)"
+
+mkdir -p "$PROJECT_DIR/library/tmp" "$PROJECT_DIR/library/build/out"
+
+# CAPCache flag: "new" rebuilds the annotation cache; "use" reuses it (faster)
+if [ "$USE_CAP_CACHE" = "use" ]; then
+    CAP_FLAG="-H:+UseCAPCache"
+else
+    CAP_FLAG="-H:+NewCAPCache"
+fi
+
+time "$NATIVE_IMAGE" \
+    --no-fallback \
+    -H:+AllowIncompleteClasspath \
+    --report-unsupported-elements-at-runtime \
+    --initialize-at-build-time=clojure,clj_commons,com.phronemophobic,edamame.impl,ham_fisted,insn,sci,tech.v3,tech.v3.datatype,tech.v3.datatype.ffi,"ham_fisted.ParallelOptions\$CatParallelism" \
+    --initialize-at-run-time=com.phronemophobic.grease.interface \
+    -H:+ExitAfterRelocatableImageWrite \
+    -H:+SharedLibrary \
+    -H:+AddAllCharsets \
+    -H:+ReportExceptionStackTraces \
+    -H:-DeadlockWatchdogExitOnTimeout \
+    -H:DeadlockWatchdogInterval=0 \
+    -H:+RemoveSaturatedTypeFlows \
+    -H:-SpawnIsolates \
+    -H:PageSize=16384 \
+    -H:EnableURLProtocols=http,https \
+    -Djdk.internal.lambda.eagerlyInitialize=false \
+    -H:TempDirectory="$PROJECT_DIR/library/tmp" \
+    -H:ReflectionConfigurationFiles="$PROJECT_DIR/conf/reflectionconfig-arm64-ios.json" \
+    -H:JNIConfigurationFiles="$PROJECT_DIR/conf/jniconfig-arm64-ios.json" \
+    -H:ResourceConfigurationFiles="$PROJECT_DIR/conf/resourceconfig-arm64-ios.json" \
+    -J-Xmx8G \
+    -J-XX:MaxDirectMemorySize=2G \
+    -J-Dclojure.spec.skip-macros=true \
+    -J-Dclojure.compiler.direct-linking=true \
+    -J-Dtech.v3.datatype.graal-native=true \
+    -Dsvm.targetName=iOS \
+    -Dsvm.targetArch=arm64 \
+    "$CAP_FLAG" \
+    -H:CAPCacheDir="$PROJECT_DIR/conf/capcache" \
+    -H:CompilerBackend=lir \
+    "-Dsvm.platform=org.graalvm.nativeimage.Platform\$IOS_AARCH64" \
+    -jar "$PROJECT_DIR/target/grease-uber.jar"
+
+echo "native-image complete at: $(date)"
+
+# Collect the output object file
+rm -rf "$PROJECT_DIR/library/build/out"
+mkdir -p "$PROJECT_DIR/library/build/out"
+find "$PROJECT_DIR/library/tmp" -name 'bb.o' -exec cp {} "$PROJECT_DIR/library/build/out/" \;
+
+if [ ! -f "$PROJECT_DIR/library/build/out/bb.o" ]; then
+    echo "ERROR: bb.o not found in library/tmp. Check native-image output above."
+    exit 1
+fi
+
+echo "Object file: library/build/out/bb.o ($(du -sh "$PROJECT_DIR/library/build/out/bb.o" | cut -f1))"
+
+# =============================================================================
+# Step 3: Fix build/graalvm symlink (Xcode project needs GraalVM headers)
+# =============================================================================
+
+echo ""
+echo "=== Step 3: Updating build/graalvm symlink ==="
+
+mkdir -p "$PROJECT_DIR/build"
+ln -snf "$GRAALVM_HOME" "$PROJECT_DIR/build/graalvm"
+echo "  build/graalvm -> $GRAALVM_HOME"
+
+# =============================================================================
+# Step 4: Generate xcconfig with updated library paths for JDK 21
+# =============================================================================
+
+echo ""
+echo "=== Step 4: Preparing xcodebuild configuration ==="
+
+XCCONFIG="$PROJECT_DIR/build/ios-jdk21.xcconfig"
+XCODE_PROJECT_DIR="$PROJECT_DIR/xcode/MobileTest"
+LIBFFI_DIR="$XCODE_PROJECT_DIR/aarch64-apple-ios/.libs"
+
+# Build the OTHER_LDFLAGS list. Replicates the Xcode project's linker flags but
+# replaces the -L paths to point at the JDK 21 lib directories.
+# Note: -lfdlibm removed — merged into libjava in JDK 21+
+OTHER_LDFLAGS="-ljava -lnio -lzip -lnet -lprefs -ljvm -lz -ldl"
+OTHER_LDFLAGS+=" -lj2pkcs11 -ljaas -lextnet -lstdc++ -lpthread -lffi"
+OTHER_LDFLAGS+=" -Wl,-framework,Foundation"
+OTHER_LDFLAGS+=" -Wl,-framework,UIKit"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreGraphics"
+OTHER_LDFLAGS+=" -Wl,-framework,MobileCoreServices"
+OTHER_LDFLAGS+=" -Wl,-framework,OpenGLES"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreText"
+OTHER_LDFLAGS+=" -Wl,-framework,QuartzCore"
+OTHER_LDFLAGS+=" -Wl,-framework,ImageIO"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreBluetooth"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreImage"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreLocation"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMedia"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMotion"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreVideo"
+OTHER_LDFLAGS+=" -Wl,-framework,Accelerate"
+OTHER_LDFLAGS+=" -Wl,-framework,AVFoundation"
+OTHER_LDFLAGS+=" -Wl,-framework,AudioToolbox"
+OTHER_LDFLAGS+=" -Wl,-framework,MediaPlayer"
+OTHER_LDFLAGS+=" -Wl,-framework,UserNotifications"
+OTHER_LDFLAGS+=" -Wl,-framework,ARKit"
+OTHER_LDFLAGS+=" -Wl,-framework,AVKit"
+OTHER_LDFLAGS+=" -Wl,-framework,SceneKit"
+OTHER_LDFLAGS+=" -Wl,-framework,StoreKit"
+OTHER_LDFLAGS+=" -Wl,-framework,ModelIO"
+OTHER_LDFLAGS+=" -Wl,-framework,WebKit"
+OTHER_LDFLAGS+=" -L$CLIBRARIES_DIR"
+OTHER_LDFLAGS+=" -L$STATICJDK_DIR/lib/static"
+
+cat > "$XCCONFIG" <<EOF
+// ios-jdk21.xcconfig — generated by scripts/build-ios — do not edit manually
+//
+// Overrides Xcode project settings to use JDK 21 iOS static libs
+// and enforce iOS $IOS_TARGET minimum deployment target.
+
+IPHONEOS_DEPLOYMENT_TARGET = $IOS_TARGET
+
+LIBRARY_SEARCH_PATHS = $LIBFFI_DIR $CLIBRARIES_DIR $STATICJDK_DIR/lib/static
+
+OTHER_LDFLAGS = $OTHER_LDFLAGS
+EOF
+
+echo "  xcconfig: build/ios-jdk21.xcconfig"
+
+# =============================================================================
+# Step 5: Build iOS app via xcodebuild CLI
+# =============================================================================
+
+echo ""
+echo "=== Step 5: Building iOS app with xcodebuild ==="
+
+cd "$PROJECT_DIR"
+
+xcodebuild \
+    -project "$XCODE_PROJECT" \
+    -scheme  "$XCODE_SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -destination "generic/platform=iOS" \
+    -xcconfig "$XCCONFIG" \
+    CODE_SIGN_IDENTITY="" \
+    CODE_SIGNING_REQUIRED="NO" \
+    CODE_SIGN_ENTITLEMENTS="" \
+    CODE_SIGNING_ALLOWED="NO" \
+    build
+
+# =============================================================================
+# Done
+# =============================================================================
+
+echo ""
+echo "================================================================"
+echo "  Build complete"
+echo "================================================================"
+echo ""
+echo "  Configuration: $CONFIGURATION"
+echo "  iOS target:    $IOS_TARGET+"
+echo ""
+echo "  MobileTest.app is in the xcodebuild DerivedData directory."
+echo "  To locate it:"
+echo "    xcodebuild -project $XCODE_PROJECT \\"
+echo "               -scheme $XCODE_SCHEME \\"
+echo "               -configuration $CONFIGURATION \\"
+echo "               -showBuildSettings 2>/dev/null | grep BUILT_PRODUCTS_DIR"
+echo ""
+echo "  For faster subsequent builds, reuse the CAPCache:"
+echo "    USE_CAP_CACHE=use ./scripts/build-ios"
+echo ""

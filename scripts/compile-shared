@@ -11,7 +11,7 @@ PROJECT_DIR="$DIR/.."
 
 cd ..
 
-clojure -X:depstar
+# clojure -X:depstar
 
 mkdir -p library
 pushd library
@@ -22,7 +22,7 @@ $GRAALVM_HOME/bin/native-image \
     --report-unsupported-elements-at-runtime \
     --no-fallback \
     --allow-incomplete-classpath \
-    --initialize-at-build-time=clojure,clj_commons,com.phronemophobic,edamame.impl,ham_fisted,insn,sci,tech.v3,tech.v3.datatype,tech.v3.datatype.ffi \
+    --initialize-at-build-time=clojure,clj_commons,com.phronemophobic,edamame.impl,ham_fisted,insn,sci,tech.v3,tech.v3.datatype,tech.v3.datatype.ffi,ham_fisted.ParallelOptions$CatParallelism \
     --initialize-at-run-time=com.phronemophobic.grease.interface \
     -H:+ExitAfterRelocatableImageWrite \
     -H:+SharedLibrary \
@@ -47,7 +47,7 @@ $GRAALVM_HOME/bin/native-image \
     -J-Dtech.v3.datatype.graal-native=true \
     -Dsvm.targetName=iOS \
     -Dsvm.targetArch=arm64 \
-    -H:+UseCAPCache \
+    -H:+NewCAPCache \
     -H:CAPCacheDir="${PROJECT_DIR}"/conf/capcache \
     -H:CompilerBackend=lir \
     '-Dsvm.platform=org.graalvm.nativeimage.Platform$IOS_AARCH64' \

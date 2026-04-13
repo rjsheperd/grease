@@ -1,0 +1,18 @@
+#!/bin/bash
+
+set -x
+set -e
+
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+cd "$DIR"
+
+PROJECT_DIR="$DIR/.."
+
+cd ..
+
+mkdir -p lib/ios-arm64-jdk-21
+
+cp ../graal/substratevm/mxbuild/darwin-aarch64/com.oracle*/**/*.a lib/ios-arm64-jdk-21 
+
+cp ../graal/substratevm/mxbuild/darwin-aarch64/com.oracle*/**/*.a lib/ios-arm64-jdk-21 

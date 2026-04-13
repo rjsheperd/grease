@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# =============================================================================
+# build-ios-static-libs
+#
+# One-time setup: build static JDK libraries for iOS arm64 using openjdk/mobile.
+# This takes 1-2 hours. Run it once; results are cached in build/.
+#
+# Outputs:
+#   build/staticjdk-ios-jdk21/lib/static/  -- libjava.a, libnio.a, etc.
+#   lib/ios-arm64-jdk-21/libjvm.a          -- Zero JVM static lib for iOS
+#
+# Prerequisites:
+#   - Xcode + Command Line Tools (xcode-select --install)
+#   - autoconf (brew install autoconf)
+#   - JDK 24+ as boot JDK (brew install --cask temurin@24 or similar)
+#
+# Usage:
+#   ./scripts/build-ios-static-libs
+#   BOOT_JDK=/path/to/jdk24 ./scripts/build-ios-static-libs
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_DIR="$DIR/.."
+
+MOBILE_REPO_DIR="$PROJECT_DIR/build/openjdk-mobile"
+SUPPORT_DIR="$PROJECT_DIR/build/mobile-support"
+SUPPORT_ZIP_URL="https://download2.gluonhq.com/mobile/mobile-support-20250106.zip"
+SUPPORT_ZIP="$SUPPORT_DIR/mobile-support.zip"
+SUPPORT_CONTENT="$SUPPORT_DIR/support"
+
+STATICJDK_OUT="$PROJECT_DIR/build/staticjdk-ios-jdk21"
+CLIBRARIES_OUT="$PROJECT_DIR/lib/ios-arm64-jdk-21"
+
+CONF_NAME="ios-aarch64-zero-release"
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if ! command -v clang >/dev/null 2>&1; then
+    echo "ERROR: clang not found."
+    echo "  Install Xcode Command Line Tools: xcode-select --install"
+    exit 1
+fi
+
+if ! command -v autoconf >/dev/null 2>&1; then
+    echo "ERROR: autoconf not found."
+    echo "  Install via Homebrew: brew install autoconf"
+    exit 1
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: git not found."
+    exit 1
+fi
+
+# Discover boot JDK (needs JDK 24+)
+if [ -n "${BOOT_JDK:-}" ]; then
+    echo "Using BOOT_JDK from environment: $BOOT_JDK"
+else
+    BOOT_JDK=""
+    for candidate in \
+        /Library/Java/JavaVirtualMachines/temurin-24.jdk/Contents/Home \
+        /Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home \
+        /Library/Java/JavaVirtualMachines/zulu-24.jdk/Contents/Home \
+        /Library/Java/JavaVirtualMachines/openjdk-24.jdk/Contents/Home \
+        "$HOME/.sdkman/candidates/java/24.*/home" \
+        "$HOME/.sdkman/candidates/java/25.*/home"; do
+        # Expand globs
+        for d in $candidate; do
+            if [ -x "$d/bin/java" ]; then
+                ver=$("$d/bin/java" -version 2>&1 | grep -oE '"[0-9]+' | head -1 | tr -d '"')
+                if [ "${ver:-0}" -ge 24 ] 2>/dev/null; then
+                    BOOT_JDK="$d"
+                    break 2
+                fi
+            fi
+        done
+    done
+
+    if [ -z "$BOOT_JDK" ]; then
+        echo "ERROR: JDK 24+ not found as boot JDK."
+        echo ""
+        echo "  openjdk/mobile master (JDK 27) requires JDK 24+ to build."
+        echo "  Install options:"
+        echo "    brew install --cask temurin@24"
+        echo "    brew install --cask temurin@25"
+        echo "    https://adoptium.net/temurin/releases/?version=24"
+        echo ""
+        echo "  Then re-run with:"
+        echo "    BOOT_JDK=/Library/Java/JavaVirtualMachines/temurin-24.jdk/Contents/Home \\"
+        echo "      ./scripts/build-ios-static-libs"
+        exit 1
+    fi
+fi
+
+echo "Boot JDK: $BOOT_JDK"
+"$BOOT_JDK/bin/java" -version 2>&1 | head -1
+
+# iOS SDK path
+IOS_SDK="${IOS_SDK:-$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo "")}"
+if [ -z "$IOS_SDK" ]; then
+    echo "ERROR: iOS SDK not found. Is Xcode installed?"
+    exit 1
+fi
+echo "iOS SDK:  $IOS_SDK"
+
+# =============================================================================
+# Phase A: Download mobile-support zip (libffi + cups for iOS)
+# =============================================================================
+
+echo ""
+echo "=== Phase A: Downloading mobile-support dependencies ==="
+
+mkdir -p "$SUPPORT_DIR"
+
+if [ ! -f "$SUPPORT_ZIP" ]; then
+    echo "Downloading $SUPPORT_ZIP_URL ..."
+    curl -L --progress-bar -o "$SUPPORT_ZIP" "$SUPPORT_ZIP_URL"
+else
+    echo "mobile-support.zip already downloaded."
+fi
+
+if [ ! -d "$SUPPORT_CONTENT/libffi" ]; then
+    echo "Extracting mobile-support.zip ..."
+    unzip -q "$SUPPORT_ZIP" -d "$SUPPORT_DIR"
+else
+    echo "mobile-support already extracted."
+fi
+
+# =============================================================================
+# Phase B: Clone openjdk/mobile
+# =============================================================================
+
+echo ""
+echo "=== Phase B: Cloning openjdk/mobile ==="
+
+if [ ! -d "$MOBILE_REPO_DIR/.git" ]; then
+    echo "Cloning https://github.com/openjdk/mobile (shallow) ..."
+    git clone --depth=1 https://github.com/openjdk/mobile.git "$MOBILE_REPO_DIR"
+else
+    echo "openjdk/mobile already cloned at $MOBILE_REPO_DIR"
+    echo "To update: cd $MOBILE_REPO_DIR && git pull"
+fi
+
+# =============================================================================
+# Phase C: Configure for iOS arm64
+# =============================================================================
+
+echo ""
+echo "=== Phase C: Configuring for iOS arm64 ==="
+
+cd "$MOBILE_REPO_DIR"
+
+if [ -f "build/$CONF_NAME/config.status" ]; then
+    echo "Already configured. Delete build/$CONF_NAME to reconfigure."
+else
+    echo "Running configure ..."
+    sh configure \
+        --disable-warnings-as-errors \
+        --openjdk-target=aarch64-macos-ios \
+        --with-boot-jdk="$BOOT_JDK" \
+        --with-libffi-include="$SUPPORT_CONTENT/libffi/include" \
+        --with-libffi-lib="$SUPPORT_CONTENT/libffi/libs" \
+        --with-cups-include="$SUPPORT_CONTENT/cups-2.3.6" \
+        --with-sysroot="$IOS_SDK" \
+        2>&1 | tee "$PROJECT_DIR/build/mobile-configure.log"
+
+    echo "Configure complete. Log: build/mobile-configure.log"
+fi
+
+# =============================================================================
+# Phase C.5: Patch gzguts.h for iOS SDK compatibility
+#
+# clang 17+ (Xcode 26+) treats implicit function declarations as errors.
+# gzlib.c, gzread.c, gzwrite.c use lseek/read/write/close without including
+# <unistd.h>. Adding it to gzguts.h (the shared header) fixes all three.
+# =============================================================================
+
+GZGUTS="$MOBILE_REPO_DIR/src/java.base/share/native/libzip/zlib/gzguts.h"
+if ! grep -q '<unistd.h>' "$GZGUTS"; then
+    echo "Patching gzguts.h: adding #include <unistd.h> ..."
+    sed -i '' 's|#include <fcntl.h>|#include <fcntl.h>\n#include <unistd.h>|' "$GZGUTS"
+    echo "Patched."
+else
+    echo "gzguts.h already patched."
+fi
+
+# =============================================================================
+# Phase D: Build static-libs-image
+# =============================================================================
+
+echo ""
+echo "=== Phase D: Building static-libs-image (this takes 1-2 hours) ==="
+echo "Started at: $(date)"
+
+make CONF="$CONF_NAME" static-libs-image \
+    2>&1 | tee "$PROJECT_DIR/build/mobile-build.log"
+
+echo "Build complete at: $(date)"
+echo "Build log: $PROJECT_DIR/build/mobile-build.log"
+
+# =============================================================================
+# Phase E: Copy outputs into grease lib dirs
+# =============================================================================
+
+echo ""
+echo "=== Phase E: Copying static libs to grease ==="
+
+STATIC_LIBS_IMAGE="$MOBILE_REPO_DIR/build/$CONF_NAME/images/static-libs"
+
+if [ ! -d "$STATIC_LIBS_IMAGE" ]; then
+    echo "ERROR: static-libs-image directory not found: $STATIC_LIBS_IMAGE"
+    echo "  Check build/mobile-build.log for errors."
+    exit 1
+fi
+
+# Copy all JDK native static libs (libjava.a, libnio.a, libnet.a, etc.)
+mkdir -p "$STATICJDK_OUT/lib/static"
+echo "Copying JDK static libs -> $STATICJDK_OUT/lib/static/"
+find "$STATIC_LIBS_IMAGE/lib" -name "*.a" ! -path "*/zero/*" -print0 | \
+    while IFS= read -r -d '' f; do
+        cp "$f" "$STATICJDK_OUT/lib/static/"
+        echo "  $(basename "$f")"
+    done
+
+# Copy libjvm.a (Zero JVM variant — required for iOS, no RWX memory)
+mkdir -p "$CLIBRARIES_OUT"
+LIBJVM_SRC="$STATIC_LIBS_IMAGE/lib/zero/libjvm.a"
+if [ -f "$LIBJVM_SRC" ]; then
+    cp "$LIBJVM_SRC" "$CLIBRARIES_OUT/libjvm.a"
+    echo "Copied libjvm.a ($(du -sh "$CLIBRARIES_OUT/libjvm.a" | cut -f1)) -> $CLIBRARIES_OUT/libjvm.a"
+else
+    echo "ERROR: libjvm.a not found at $LIBJVM_SRC"
+    echo "  Inspect $STATIC_LIBS_IMAGE/lib/ for available outputs."
+    exit 1
+fi
+
+# =============================================================================
+# Done
+# =============================================================================
+
+echo ""
+echo "================================================================"
+echo "  Static iOS JDK libs ready"
+echo "================================================================"
+echo ""
+echo "  JDK static libs: $STATICJDK_OUT/lib/static/"
+echo "       libjvm.a:   $CLIBRARIES_OUT/libjvm.a"
+echo ""
+echo "  Next step: run scripts/build-ios"
+echo ""

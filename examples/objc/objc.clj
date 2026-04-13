@@ -1,103 +1,83 @@
+;; Objective-C FFI examples using objcjure.
+;;
+;; Usage: connect to the on-device nREPL (port 23456) and eval each top-level
+;; form, or load the whole file with (load-file "path/to/objc.clj").
+;;
+;; The `objc` macro dispatches an Obj-C message send. Syntax:
+;;   (objc [receiver :selector arg ...])
+;;   (objc [receiver :sel1:sel2: arg1 arg2])
+
 (ns objc
-  (:require [com.phronemophobic.clj-objc :as objc]))
+  (:require [com.phronemophobic.objcjure :as objcjure :refer [objc]]))
 
+;; =============================================================================
+;; Basic class / instance usage
+;; =============================================================================
 
+;; Create and init an NSMutableSet
+(def my-set
+  (objc [[NSMutableSet :alloc] :init]))
 
-;; Create Objective-c class
-(def NSMutableSet (objc/string->class "NSMutableSet"))
+(println (objcjure/objc->str my-set))
 
-;; alloc NSMutableSet
-(def my-set (objc/call-objc NSMutableSet "alloc" :pointer))
-;; init NSMutableSet
-(def my-set (objc/call-objc my-set "init" :pointer))
+;; =============================================================================
+;; Alert dialog
+;; =============================================================================
 
-(println (objc/objc->str my-set))
+(defn root-view-controller
+  "Returns the current root UIViewController."
+  []
+  (objc [[[UIApplication :sharedApplication] :keyWindow] :rootViewController]))
 
-(defn root-view-controller []
-;; [UIApplication sharedApplication].keyWindow.rootViewController  
-  (-> (objc/string->class "UIApplication")
-      (objc/call-objc "sharedApplication" :pointer)
-      (objc/call-objc "keyWindow" :pointer)
-      (objc/call-objc "rootViewController" :pointer)))
-
-(defn show-alert [title body ok-text]
-  (objc/dispatch-main
-   (fn []
-     (let [
-           ;; UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"My Alert"
-           ;;                                message:@"This is an alert."
-           ;;                                preferredStyle:UIAlertControllerStyleAlert];
-           alert (-> (objc/string->class "UIAlertController")
-                     (objc/call-objc "alertControllerWithTitle:message:preferredStyle:"
-                                     :pointer
-                                     :pointer (objc/->nsstring (str title))
-                                     :pointer (objc/->nsstring (str body))
-                                     :int32 1))
-
-           
-           ;; UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
-           ;;    handler:^(UIAlertAction * action) {}];           
-           ok-handler (objc/make-block (fn [action])
-                                       :void
-                                       :pointer)
-           alert-action (-> (objc/string->class "UIAlertAction")
-                            (objc/call-objc "actionWithTitle:style:handler:"
-                                            :pointer
-                                            :pointer (objc/->nsstring (str ok-text))
-                                            :int32 0
-                                            :pointer ok-handler))
-           ]
-       ;; [alert addAction:defaultAction];
-
-       (objc/call-objc alert "addAction:"
-                       :void
-                       :pointer alert-action)
-       ;; [self presentViewController:alert animated:YES completion:nil];
-       (objc/call-objc (root-view-controller)
-                       "presentViewController:animated:completion:"
-                       :void
-                       :pointer alert
-                       :int8 1
-                       :int64 0))))
-  )
+(defn show-alert
+  "Presents a UIAlertController dialog on the main thread."
+  [title body ok-text]
+  (objcjure/dispatch-main-async
+    (fn []
+      (let [alert  (objc [UIAlertController
+                           :alertControllerWithTitle:message:preferredStyle
+                           ~(objcjure/str->nsstring title)
+                           ~(objcjure/str->nsstring body)
+                           1])                         ; UIAlertControllerStyleAlert
+            action (objc [UIAlertAction
+                           :actionWithTitle:style:handler
+                           ~(objcjure/str->nsstring ok-text)
+                           0                           ; UIAlertActionStyleDefault
+                           ~(objc (fn ^void [_action]))])]
+        (objc [alert :addAction action])
+        (objc [(root-view-controller)
+               :presentViewController:animated:completion
+               alert true nil])))))
 
 (comment
-  (show-alert "Hey!" "Check out clojure on mobile!" "Okie dokie!")
-  ,
-  )
+  (show-alert "Hey!" "Check out Clojure on mobile!" "Okie dokie!")
+  ,)
 
+;; =============================================================================
+;; NSArray sort using a comparator block
+;; =============================================================================
 
-;; Create an array 
-(def arr (-> (objc/string->class "NSMutableArray")
-             (objc/call-objc "array" :pointer)))
+(def arr (objc [NSMutableArray :array]))
 
-;; add objects
 (do
-  (objc/call-objc arr "addObject:" :void :pointer (objc/->nsstring "a"))
-  (objc/call-objc arr "addObject:" :void :pointer (objc/->nsstring "bb"))
-  (objc/call-objc arr "addObject:" :void :pointer (objc/->nsstring "ccc"))
-  (objc/call-objc arr "addObject:" :void :pointer (objc/->nsstring "dd")))
+  (objc [arr :addObject ~(objcjure/str->nsstring "a")])
+  (objc [arr :addObject ~(objcjure/str->nsstring "bb")])
+  (objc [arr :addObject ~(objcjure/str->nsstring "ccc")])
+  (objc [arr :addObject ~(objcjure/str->nsstring "dd")]))
 
-;; helper function for finding string length
-(defn str-length [nstr]
-  (objc/call-objc nstr "length" :int32))
+(defn str-length [nsstr]
+  (objc ^int [nsstr :length]))
 
-;; Make a comparator block
-(def sorter
-  (objc/make-block (fn [a b]
-                     (let [alength (str-length a)
-                           blength (str-length b)]
-                       (if (> alength blength)
-                         -1
-                         (if (= alength blength)
-                           0
-                           1))))
-                   :int32
-                   :pointer :pointer))
+;; Comparator block: sort descending by string length
+(def length-comparator
+  (objc (fn ^int [a b]
+          (let [la (str-length a)
+                lb (str-length b)]
+            (cond (> la lb) -1
+                  (= la lb)  0
+                  :else      1)))))
 
-;; sort array using comparator block
-(def sorted-array (objc/call-objc arr "sortedArrayUsingComparator:"
-                                  :pointer
-                                  :pointer sorter))
-(println (objc/objc->str sorted-array))
+(def sorted-array
+  (objc [arr :sortedArrayUsingComparator length-comparator]))
 
+(println (objcjure/objc->str sorted-array))

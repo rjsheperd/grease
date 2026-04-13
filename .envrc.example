@@ -1,0 +1,52 @@
+# Copy this file to .envrc and fill in your values.
+# direnv will load it automatically: https://direnv.net
+
+# GraalVM Gluon with iOS support — auto-detected by build-bb-o if placed in
+# grease/graal/ or ~/.graal/latest.  Override here if needed.
+# export GRAALVM_HOME=/path/to/graalvm-gluon/Contents/Home
+export JAVA_HOME=$HOME/.graal/latest/Contents/Home
+export GRAALVM_HOME=$JAVA_HOME
+export PATH=$JAVA_HOME/bin:$PATH
+
+# Sibling ios-graal-jdk-21 repo — source of libjava.a / libjvm.a / libios_jdk_stubs.a.
+# build-bb-o syncs newer libs from here into lib/ios-arm64/ automatically.
+export IOS_GRAAL_HOME="$(cd "$(dirname "$BASH_SOURCE")/../ios-graal-jdk-21" 2>/dev/null && pwd || echo "")"
+
+# Local lib dir — synced from ios-graal-jdk-21 by build-bb-o; referenced by
+# xcconfig and build-demo-app so the grease repo is self-contained at link time.
+export IOS_GRAAL_LIBS="$PWD/lib/ios-arm64"
+
+# iOS cross-compilation environment
+export CC=$(xcrun --sdk iphoneos --find clang 2>/dev/null || echo "")
+export CXX=$(xcrun --sdk iphoneos --find clang++ 2>/dev/null || echo "")
+export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo "")
+export SYSROOT=$SDKROOT
+export ARCHFLAGS="-arch arm64 -miphoneos-version-min=16.0"
+export CFLAGS="-target arm64-apple-ios16.0 $ARCHFLAGS --sysroot=$SDKROOT"
+export LDFLAGS="-target arm64-apple-ios16.0 $ARCHFLAGS --sysroot=$SDKROOT"
+
+# Xcode path — must match xcode-select active path.
+# Find with: xcode-select -p
+export XCODE_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+
+# Apple Developer team ID — find in developer.apple.com or:
+#   security find-identity -v -p codesigning | grep "Apple Development"
+export DEVELOPMENT_TEAM="XXXXXXXXXX"
+
+# Connected iOS device UDID — find with:
+#   xcrun xctrace list devices   OR   ios-deploy --detect
+export DEVICE_UDID="00000000-0000000000000000"
+
+# SHA-1 of your "Apple Development" signing certificate (login keychain):
+#   security find-identity -v -p codesigning
+export CERT_HASH="0000000000000000000000000000000000000000"
+
+# UUID of your provisioning profile:
+#   ls ~/Library/MobileDevice/Provisioning\ Profiles/
+export PROFILE_UUID="00000000-0000-0000-0000-000000000000"
+
+# App Store Connect API key (used by fastlane for automated signing/upload).
+# Generate at: https://appstoreconnect.apple.com/access/integrations/api
+export APPLE_ISSUER_ID="00000000-0000-0000-0000-000000000000"
+export APPLE_KEY_ID="XXXXXXXXXX"
+export APPLE_SECRET_PATH=$HOME/.apple_dev/AuthKey_$APPLE_KEY_ID.p8
