@@ -1,0 +1,564 @@
+#+TITLE: Next Steps — Clojure ↔ ObjC/Swift Interface
+#+DATE: 2026-04-14
+#+OPTIONS: toc:2 num:nil
+#+TODO: TODO IN-PROGRESS | DONE CANCELLED
+
+The goal: a complete Clojure ↔ ObjC/Swift interface with access to UIKit,
+CoreData, CoreLocation, CoreBluetooth, AVFoundation, HealthKit, and beyond —
+defined entirely from the Clojure nREPL with zero Bridge.m changes and zero
+~build-bb-o~ rebuilds after initial setup.
+
+* Phase 0 — Runtime ObjC Class Builder [7/7] :DONE:
+
+All prototype steps proven working. ~run_test_location.py~ passes end-to-end
+with no runtime workarounds on a fresh native image.
+
+** DONE Step 1 — Verify ObjC Runtime Primitives via FFI
+
+~objc_allocateClassPair~, ~objc_registerClassPair~, ~sel_registerName~, and
+~class_addMethod~ all reachable from nREPL via ~clj-libffi~.
+
+** DONE Step 2 — Audit clj-libffi Callback API
+
+~make-imp~ exposed via ~com.phronemophobic.grease/make-imp~. Used Path A
+(existing grease JVM function) rather than manual ~ffi_closure_alloc~.
+
+** DONE Step 3 — Add a Method and Call It
+
+Clojure fn wired as ObjC IMP via ~make-imp~ + ~class_addMethod~. Callbacks
+dispatch into Clojure successfully.
+
+** DONE Step 4 — Build ~grease.ios.objc~ Namespace
+
+~src/grease/ios/objc.clj~ — provides ~defclass~, ~msg-send~, ~new-instance~.
+Fixed nested-backtick / GraalVM freeze bug (use ~mapv~ outside backtick).
+Fixed SCI alias resolution (fully-qualified names in syntax-quote).
+
+** DONE Step 5 — Expose ~grease.ios.objc~ in the SCI Context
+
+Loaded at startup via ~sci/eval-string*~ in ~grease.clj~. Available from
+nREPL without rebuild. (~sci/new-macro-var~ remains a future improvement.)
+
+** DONE Step 6 — Add Location Entitlement
+
+~NSLocationWhenInUseUsageDescription~ added to Info.plist.
+
+** DONE Step 7 — Proof of Concept: ~CLLocationManagerDelegate~
+
+~@last-location~ returns a non-nil ~CLLocation~ pointer from the device nREPL.
+ObjC classes defined at REPL eval time ✓. Protocol methods dispatching into
+Clojure ✓. Native OS callbacks updating Clojure-side state ✓.
+
+* Phase 1 — Foundation Type Bridge :HIGH_LEVERAGE:
+
+The highest-leverage improvement: every iOS API return value currently
+arrives as a raw pointer map ~{:address 0x...}~. Bidirectional conversion
+makes every callback payload immediately readable and composable.
+
+** TODO 1.1 NSString ↔ Clojure string
+
+#+begin_src clojure
+;; ObjC → Clojure
+(defn nsstring->str [ptr]
+  (let [c-ptr (msg-send :pointer ptr "UTF8String")]
+    (tech.v3.datatype.ffi/c->string c-ptr)))
+
+;; Clojure → ObjC
+(defn ->nsstring [s]
+  (msg-send :pointer (get-class "NSString")
+            "stringWithUTF8String:" :pointer
+            (tech.v3.datatype.ffi/string->c s)))
+#+end_src
+
+** TODO 1.2 NSArray ↔ Clojure vector
+
+#+begin_src clojure
+(defn nsarray->vec [arr]
+  (let [n (msg-send :int64 arr "count")]
+    (mapv #(msg-send :pointer arr "objectAtIndex:" :int64 %) (range n))))
+
+(defn ->nsarray [coll]
+  (let [a (msg-send :pointer (get-class "NSMutableArray") "array")]
+    (doseq [item coll]
+      (msg-send :void a "addObject:" :pointer item))
+    a))
+#+end_src
+
+** TODO 1.3 NSDictionary ↔ Clojure map
+
+Iterate via ~allKeys~ (NSArray), then ~objectForKey:~ for each key.
+Keys and values may be NSString, NSNumber, or nested containers.
+
+** TODO 1.4 NSNumber ↔ Clojure number
+
+#+begin_src clojure
+(defn nsnumber->long   [n] (msg-send :int64   n "longLongValue"))
+(defn nsnumber->double [n] (msg-send :float64 n "doubleValue"))
+(defn ->nsnumber-int   [v] (msg-send :pointer (get-class "NSNumber")
+                                     "numberWithLongLong:" :int64 v))
+#+end_src
+
+** TODO 1.5 NSError ↔ Clojure ex-info
+
+#+begin_src clojure
+(defn nsexception->map [err]
+  {:domain      (nsstring->str (msg-send :pointer err "domain"))
+   :code        (msg-send :int64 err "code")
+   :description (nsstring->str (msg-send :pointer err "localizedDescription"))})
+#+end_src
+
+** TODO 1.6 Extract into ~grease.ios.foundation~ namespace
+
+Commit all converters as ~src/grease/ios/foundation.clj~ and expose in SCI
+context. Add to startup ~sci/eval-string*~ load alongside ~objc.clj~.
+
+* Phase 2 — ObjC Blocks (Completion Handlers)
+
+ObjC blocks are the single most important missing piece for modern iOS APIs.
+URLSession, UIView animations, HealthKit authorization, and most async
+callbacks use blocks, not delegate protocols.
+
+** TODO 2.1 Write C shim layer in Xcode project
+
+Add ~grease_blocks.m~ / ~grease_blocks.h~ to ~xcode/MobileTest/MobileTest/~:
+
+#+begin_src objc
+// grease_blocks.h
+typedef void (*GreaseVoidFn)(void *ctx);
+typedef void (*GreaseDataFn)(void *ctx, id data, id response, id error);
+
+void (^grease_make_void_block(GreaseVoidFn fn, void *ctx))(void);
+void (^grease_make_data_block(GreaseDataFn fn, void *ctx))(NSData*, NSURLResponse*, NSError*);
+#+end_src
+
+The ~fn~ pointer comes from ~make-imp~. ~ctx~ is a retained Clojure function
+reference (held in a global atom to prevent GC).
+
+** TODO 2.2 Call shim from Clojure
+
+#+begin_src clojure
+(defn make-void-block [f]
+  (let [imp (make-imp f [] :void)]
+    (ffi/call "grease_make_void_block" :pointer :pointer imp :pointer 0)))
+
+(defn make-data-block [f]
+  (let [imp (make-imp f [:pointer :pointer :pointer] :void)]
+    (ffi/call "grease_make_data_block" :pointer :pointer imp :pointer 0)))
+#+end_src
+
+** TODO 2.3 Demonstrate with UIView animation
+
+#+begin_src clojure
+(dispatch-main-async
+  (fn []
+    (let [done-block (make-void-block (fn [] (println "animation done")))]
+      (msg-send :void (get-class "UIView")
+                "animateWithDuration:animations:completion:"
+                :float64 0.3
+                :pointer (make-void-block (fn [] (println "animating")))
+                :pointer done-block))))
+#+end_src
+
+** TODO 2.4 Demonstrate with URLSession data task
+
+#+begin_src clojure
+(let [session (msg-send :pointer (get-class "NSURLSession") "sharedSession")
+      url     (msg-send :pointer (get-class "NSURL")
+                        "URLWithString:" :pointer (->nsstring "https://example.com"))
+      req     (msg-send :pointer (get-class "NSURLRequest")
+                        "requestWithURL:" :pointer url)
+      handler (make-data-block
+               (fn [_ data resp err]
+                 (println "status:" (msg-send :int64 resp "statusCode"))
+                 (println "bytes:" (msg-send :int64 data "length"))))
+      task    (msg-send :pointer session
+                        "dataTaskWithRequest:completionHandler:" :pointer req :pointer handler)]
+  (msg-send :void task "resume"))
+#+end_src
+
+* Phase 3 — Struct Arg Handling (UIKit Frames)
+
+~CGRect~, ~CGPoint~, ~CGSize~, and ~CGAffineTransform~ are C structs, not
+pointers. Most UIKit layout methods require them. ~objc_msgSend_stret~ handles
+struct-returning methods on some architectures (arm64 uses registers for
+small structs).
+
+** TODO 3.1 Write scalar-arg C shims for common UIKit layout
+
+#+begin_src objc
+// In grease_uikit.m
+void grease_set_frame(id view, double x, double y, double w, double h) {
+    view.frame = CGRectMake(x, y, w, h);
+}
+CGRect grease_get_frame(id view) { return view.frame; }
+void grease_set_center(id view, double cx, double cy) {
+    view.center = CGPointMake(cx, cy);
+}
+#+end_src
+
+** TODO 3.2 Expose shims via clj-libffi
+
+#+begin_src clojure
+(defn set-frame! [view x y w h]
+  (dispatch-main-async
+    #(ffi/call "grease_set_frame" :void :pointer view
+               :float64 x :float64 y :float64 w :float64 h)))
+
+(defn get-frame [view]
+  ;; Returns struct — need grease_get_frame_x/y/w/h scalar wrappers
+  {:x (ffi/call "grease_get_frame_x" :float64 :pointer view)
+   :y (ffi/call "grease_get_frame_y" :float64 :pointer view)
+   :w (ffi/call "grease_get_frame_w" :float64 :pointer view)
+   :h (ffi/call "grease_get_frame_h" :float64 :pointer view)})
+#+end_src
+
+** TODO 3.3 Investigate ~objc_msgSend_stret~ for struct return via FFI
+
+Determine if ~clj-libffi~ can call ~objc_msgSend_stret~ with a struct output
+buffer. If yes, eliminates the need for C shims for struct-returning methods.
+
+* Phase 4 — UIKit Live Manipulation
+
+With the Foundation bridge and struct shims in place, the full UIKit view
+hierarchy becomes accessible from the nREPL.
+
+** TODO 4.1 View hierarchy traversal helpers
+
+#+begin_src clojure
+(defn key-window []
+  (let [app (msg-send :pointer (get-class "UIApplication") "sharedApplication")]
+    (msg-send :pointer app "keyWindow")))
+
+(defn root-view []
+  (let [rvc (msg-send :pointer (key-window) "rootViewController")]
+    (msg-send :pointer rvc "view")))
+
+(defn subviews [view]
+  (nsarray->vec (msg-send :pointer view "subviews")))
+
+(defn describe-view [view]
+  {:class (nsstring->str (msg-send :pointer (msg-send :pointer view "class") "description"))
+   :frame (get-frame view)
+   :subview-count (msg-send :int64 (msg-send :pointer view "subviews") "count")})
+#+end_src
+
+** TODO 4.2 Create and add UI elements from REPL
+
+#+begin_src clojure
+(dispatch-main-async
+  (fn []
+    (let [label (msg-send :pointer (get-class "UILabel") "new")]
+      (msg-send :void label "setText:" :pointer (->nsstring "Hello from REPL"))
+      (set-frame! label 20 100 300 44)
+      (msg-send :void (root-view) "addSubview:" :pointer label))))
+#+end_src
+
+** TODO 4.3 Reactive atom → UI update pattern
+
+#+begin_src clojure
+(def ui-label (atom nil))
+
+(defn init-label! []
+  (dispatch-main-async
+    (fn []
+      (let [lbl (msg-send :pointer (get-class "UILabel") "new")]
+        (set-frame! lbl 20 100 300 44)
+        (msg-send :void (root-view) "addSubview:" :pointer lbl)
+        (reset! ui-label lbl)))))
+
+(def display-text (atom ""))
+
+(add-watch display-text :ui
+  (fn [_ _ _ new-val]
+    (dispatch-main-async
+      #(msg-send :void @ui-label "setText:" :pointer (->nsstring new-val)))))
+
+;; From nREPL, instantly updates the on-screen label:
+;; (reset! display-text "Updated!")
+#+end_src
+
+* Phase 5 — REPL Developer Experience
+
+Helpers that make the nREPL feel like a first-class iOS exploration tool.
+
+** TODO 5.1 Runtime introspection helpers
+
+#+begin_src clojure
+(defn methods-of
+  "Lists all method selectors for an ObjC class by name."
+  [class-name]
+  ;; class_copyMethodList returns a C array of Method; iterate count items
+  ...)
+
+(defn respond-to?
+  "Returns true if obj responds to the given selector string."
+  [obj sel-str]
+  (let [sel (register-objc-sel sel-str)]
+    (not= 0 (msg-send :int8 obj "respondsToSelector:" :pointer sel))))
+
+(defn class-name-of
+  "Returns the ObjC class name of a pointer as a Clojure string."
+  [obj]
+  (nsstring->str (msg-send :pointer (msg-send :pointer obj "class") "description")))
+
+(defn super-class-of [class-name]
+  (let [cls (get-class class-name)]
+    (nsstring->str (msg-send :pointer (msg-send :pointer cls "superclass") "description"))))
+#+end_src
+
+** TODO 5.2 Better error surfacing from ~dispatch-main-async~
+
+Wrap main-thread dispatches so exceptions propagate back to nREPL output:
+
+#+begin_src clojure
+(defmacro on-main [& body]
+  `(let [result# (promise)]
+     (dispatch-main-async
+       (fn []
+         (try
+           (deliver result# {:ok (do ~@body)})
+           (catch Exception e#
+             (deliver result# {:err (Throwable->map e#)})))))
+     (let [r# (deref result# 10000 :timeout)]
+       (if-let [err# (:err r#)]
+         (throw (ex-info "Main thread error" err#))
+         (:ok r#)))))
+#+end_src
+
+** TODO 5.3 Hot-reload pattern for ~defclass~
+
+~defclass~ is not idempotent — re-registering a class with the same name
+crashes. Document and implement a versioned-suffix pattern:
+
+#+begin_src clojure
+(def delegate-version (atom 0))
+
+(defmacro defclass!
+  "Like defclass but appends an auto-incrementing version suffix.
+  Safe to re-evaluate from the nREPL across sessions."
+  [class-name superclass & method-specs]
+  `(let [versioned# (str ~(str class-name) "_v" (swap! delegate-version inc))]
+     (defclass ~class-name ~superclass ~@method-specs)))
+#+end_src
+
+** TODO 5.4 Extract into ~dev/repl_helpers.clj~
+
+Commit all introspection and ergonomics fns. Load via ~(load-file ...)~ from
+nREPL as needed (does not require rebuild).
+
+* Phase 6 — Additional Delegate Frameworks
+
+With ~defclass~ proven, every delegate-based framework follows the same
+three-step pattern: ~defclass~ → set delegate → ~msg-send~ to start.
+
+** TODO 6.1 CoreBluetooth
+
+#+begin_src clojure
+(defclass BTDelegate "NSObject"
+  "centralManagerDidUpdateState:" "v@:@"
+  (fn [_self _cmd mgr]
+    (println "BT state:" (msg-send :int64 mgr "state")))
+  "centralManager:didDiscoverPeripheral:advertisementData:RSSI:" "v@:@@@q"
+  (fn [_self _cmd _mgr peripheral adv rssi]
+    (println "Found:" (nsstring->str (msg-send :pointer peripheral "name"))
+             "RSSI:" rssi)))
+
+(dispatch-main-async
+  (fn []
+    (let [cls (get-class "CBCentralManager")
+          d   (new-instance BTDelegate)
+          mgr (msg-send :pointer cls "alloc")]
+      (reset! held-bt-delegate d)
+      (reset! held-bt-manager
+        (msg-send :pointer mgr "initWithDelegate:queue:" :pointer d :pointer 0))
+      (msg-send :void @held-bt-manager "scanForPeripheralsWithServices:options:"
+                :pointer 0 :pointer 0))))
+#+end_src
+
+Note: ~CBCentralManager~ requires ~NSBluetoothAlwaysUsageDescription~ in
+Info.plist and Bluetooth entitlement in the provisioning profile.
+
+** TODO 6.2 AVFoundation / Camera
+
+#+begin_src clojure
+(defclass VideoDelegate "NSObject"
+  "captureOutput:didOutputSampleBuffer:fromConnection:" "v@:@@@"
+  (fn [_self _cmd _output sample-buf _conn]
+    ;; CMSampleBufferRef is :pointer — pass to grease_sample_buffer_info C shim
+    (reset! last-frame sample-buf)))
+#+end_src
+
+Requires ~NSCameraUsageDescription~ in Info.plist. The session setup
+(~AVCaptureSession~, ~AVCaptureVideoDataOutput~, dispatch queue) uses
+~msg-send~ throughout. Frame data extraction needs C shims for
+~CMSampleBufferGetImageBuffer~ + ~CVPixelBufferLockBaseAddress~.
+
+** TODO 6.3 HealthKit
+
+#+begin_src clojure
+;; Authorization uses a block — requires Phase 2 (ObjC blocks) first.
+(let [store (msg-send :pointer (get-class "HKHealthStore") "new")
+      step-type (msg-send :pointer (get-class "HKObjectType")
+                          "quantityTypeForIdentifier:" :pointer
+                          (->nsstring "HKQuantityTypeIdentifierStepCount"))
+      read-types (->nsarray [step-type])
+      handler (make-data-block
+               (fn [_ _ _ err]
+                 (if (= 0 (msg-send :int64 err "code"))
+                   (println "HealthKit authorized")
+                   (println "Error:" (nsstring->str (msg-send :pointer err "localizedDescription"))))))]
+  (msg-send :void store "requestAuthorizationToShareTypes:readTypes:completion:"
+            :pointer 0 :pointer read-types :pointer handler))
+#+end_src
+
+** TODO 6.4 NFC (~NFCNDEFReaderSession~)
+
+#+begin_src clojure
+(defclass NFCDelegate "NSObject"
+  "readerSession:didDetectNDEFs:" "v@:@@"
+  (fn [_self _cmd _session messages]
+    (doseq [msg (nsarray->vec messages)]
+      (println "NFC record:" (nsarray->vec (msg-send :pointer msg "records")))))
+  "readerSession:didInvalidateWithError:" "v@:@@"
+  (fn [_self _cmd _session err]
+    (println "NFC error:" (nsstring->str (msg-send :pointer err "localizedDescription")))))
+#+end_src
+
+Requires ~NFCReaderUsageDescription~ in Info.plist and NFC entitlement.
+
+** TODO 6.5 Push Notifications (~UNUserNotificationCenter~)
+
+#+begin_src clojure
+(defclass NotifDelegate "NSObject"
+  "userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:" "v@:@@@"
+  (fn [_self _cmd _center response handler]
+    (println "Notification tapped:"
+             (nsstring->str (msg-send :pointer
+                                      (msg-send :pointer response "notification")
+                                      "request")))
+    ;; Must call handler block to acknowledge
+    (ffi/call "grease_call_void_block" :void :pointer handler)))
+#+end_src
+
+* Phase 7 — Protocol Conformance
+
+Currently ~defclass~ registers methods without marking the class as
+conforming to a protocol. Adding explicit conformance improves ObjC runtime
+inspection and eliminates delegate type-check warnings.
+
+** TODO 7.1 Add ~class_addProtocol~ to ~defclass~
+
+#+begin_src clojure
+(defn add-protocol! [cls protocol-name]
+  (let [proto (ffi/call "objc_getProtocol" :pointer :pointer
+                        (tech.v3.datatype.ffi/string->c protocol-name))]
+    (ffi/call "class_addProtocol" :int8 :pointer cls :pointer proto)))
+#+end_src
+
+Extend ~defclass~ macro to accept an optional ~:protocols ["ProtoName"]~
+option before the method specs.
+
+** TODO 7.2 Verify required selectors at registration time
+
+#+begin_src clojure
+(defn protocol-required-methods [protocol-name]
+  ;; protocol_copyMethodDescriptionList — returns array of method descriptors
+  ;; filter where isRequired=true
+  ...)
+
+(defn check-conformance! [cls protocol-name]
+  (let [required (protocol-required-methods protocol-name)
+        missing  (remove #(respond-to? cls %) required)]
+    (when (seq missing)
+      (throw (ex-info "Missing required protocol methods"
+                      {:protocol protocol-name :missing missing})))))
+#+end_src
+
+* Phase 8 — Swift Interop
+
+Swift classes marked ~@objc~ (or inheriting from ~NSObject~) are visible in
+the ObjC runtime. The same ~defclass~ / ~msg-send~ patterns apply directly.
+
+** TODO 8.1 Document ~@objc~ bridge pattern
+
+Any Swift class in the Xcode project marked ~@objc class MyService: NSObject~
+is accessible via:
+#+begin_src clojure
+(get-class "MyService")
+(msg-send :pointer (get-class "MyService") "sharedInstance")
+(msg-send :void my-service "processData:" :pointer (->nsstring data))
+#+end_src
+
+Write ~examples/swift/swift_bridge.clj~ demonstrating the pattern.
+
+** TODO 8.2 SwiftUI via ~UIHostingController~
+
+SwiftUI uses value types — not directly callable from ObjC runtime.
+Pattern: write a ~UIHostingController~ subclass in Swift that exposes
+~@objc~ configuration hooks. Drive from Clojure via ~msg-send~.
+
+#+begin_src swift
+// In Swift
+@objc class GreaseHostingController: UIHostingController<AnyView> {
+    @objc func setBodyText(_ text: String) {
+        // update SwiftUI state from Clojure msg-send
+    }
+}
+#+end_src
+
+** TODO 8.3 Swift actors and async/await bridge
+
+Swift ~async/await~ is not ObjC-accessible. Wrapper pattern: expose
+synchronous ~@objc~ entry points that dispatch into actors internally.
+
+* Phase 9 — Build Pipeline Improvements
+
+** TODO 9.1 ~sci/new-macro-var~ for ~defclass~
+
+Currently ~defclass~ reaches SCI via ~sci/eval-string*~ (source re-parse).
+~sci/new-macro-var~ registers the macro directly from JVM Clojure, avoiding
+the GraalVM freeze issue for the macro function entirely.
+
+Investigate in ~src/com/phronemophobic/grease.clj~ following the existing
+~objc-wrapper~ pattern at lines ~240–260.
+
+** TODO 9.2 Resource-file hot-reload for faster iteration
+
+Compile a stub native image with only the runtime scaffolding. Load Clojure
+code at startup via ~sci/eval-file~ from the app bundle resource directory.
+Xcode can copy resource files (~.clj~) without relinking. Most logic changes
+deploy via file copy + app restart rather than full native-image rebuild.
+
+Investigate: ~sci/eval-file~ vs ~sci/eval-string~ from resource bundle path.
+
+** TODO 9.3 Incremental GraalVM native-image layers
+
+GraalVM ~-H:+LayeredBaseImageSupport~ (experimental) allows a base layer
+that Clojure runtime code layers on top of. Not yet stable for iOS targets —
+track GraalVM releases for availability.
+
+** TODO 9.4 Automated integration test suite
+
+Extend ~tests/run_test_location.py~ pattern to cover Phase 6 frameworks as
+they are implemented. Each test: load namespace → start service → wait for
+callback → assert non-nil result.
+
+#+begin_src bash
+python3 tests/run_test_location.py    # CLLocationManager (proven)
+python3 tests/run_test_bluetooth.py   # CBCentralManager (Phase 6.1)
+python3 tests/run_test_camera.py      # AVFoundation (Phase 6.2)
+#+end_src
+
+* Priority Order
+
+| Phase | Leverage | Effort | Prerequisite |
+|-------+----------+--------+--------------|
+| 1 — Foundation types | Highest | Low | None |
+| 2 — ObjC blocks | Very high | Medium | None |
+| 5 — REPL helpers | High | Low | None |
+| 3 — Struct args | High | Medium | None |
+| 4 — UIKit live | High | Medium | 1, 2, 3 |
+| 6 — More delegates | Medium | Low each | 1 |
+| 7 — Protocol conformance | Medium | Low | None |
+| 8 — Swift interop | Medium | Low | None |
+| 9 — Build pipeline | Low-Medium | High | None |

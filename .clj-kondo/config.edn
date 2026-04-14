@@ -1,0 +1,3 @@
+{;; Teach kondo that defclass defines a var (first arg is the name).
+ ;; Without this, any reference to a defclass'd symbol is reported as unresolved.
+ :lint-as {grease.ios.objc/defclass clojure.core/def}}
