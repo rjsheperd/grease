@@ -135,23 +135,32 @@
     v = void   @ = id/object   : = SEL   q = long long   i = int"
   [class-name superclass & method-specs]
   ;; NOTE: Use fully-qualified names throughout the syntax-quote template.
-  ;; SCI evaluates macro syntax-quote at expansion time (not definition time),
-  ;; so namespace aliases like `grease/` are resolved in the CALLING namespace,
+  ;; SCI resolves syntax-quote symbols at expansion time in the CALLING namespace,
   ;; not the defining namespace.  Fully-qualified names work in any namespace.
-  (let [cls-sym (gensym "cls")]
+  ;;
+  ;; NOTE: method-forms is computed BEFORE the outer backtick to avoid nested
+  ;; backtick context.  When frozen in a GraalVM native image via
+  ;; --initialize-at-build-time=sci, SCI cannot resolve ~cls-sym inside a
+  ;; nested backtick (the gensym counter restarts, producing a different symbol
+  ;; than the outer let binding).  Computing method-forms in plain code first
+  ;; means the inner backtick is only one level deep.
+  (let [cls-sym (gensym "cls")
+        method-forms
+        (mapv (fn [[sel-str enc f]]
+                (let [extra-sym (gensym "extra-types")
+                      ret-sym   (gensym "ret-type")
+                      imp-sym   (gensym "imp")
+                      sel-sym   (gensym "sel")]
+                  `(let [~extra-sym (grease.ios.objc/parse-extra-arg-types ~enc)
+                         ~ret-sym   (grease.ios.objc/ret-type-from-encoding ~enc)
+                         ~imp-sym   (com.phronemophobic.grease/make-imp ~f ~extra-sym ~ret-sym)
+                         ~sel-sym   (com.phronemophobic.grease/register-objc-sel ~sel-str)]
+                     (com.phronemophobic.grease/add-objc-method!
+                      ~cls-sym ~sel-sym ~imp-sym ~enc))))
+              (partition 3 method-specs))]
     `(let [~cls-sym (com.phronemophobic.grease/allocate-objc-class!
                      ~(str class-name)
                      (com.phronemophobic.grease/get-objc-class ~superclass))]
-       ~@(for [[sel-str enc f] (partition 3 method-specs)]
-           (let [extra-sym (gensym "extra-types")
-                 ret-sym   (gensym "ret-type")
-                 imp-sym   (gensym "imp")
-                 sel-sym   (gensym "sel")]
-             `(let [~extra-sym (grease.ios.objc/parse-extra-arg-types ~enc)
-                    ~ret-sym   (grease.ios.objc/ret-type-from-encoding ~enc)
-                    ~imp-sym   (com.phronemophobic.grease/make-imp ~f ~extra-sym ~ret-sym)
-                    ~sel-sym   (com.phronemophobic.grease/register-objc-sel ~sel-str)]
-                (com.phronemophobic.grease/add-objc-method!
-                 ~cls-sym ~sel-sym ~imp-sym ~enc))))
+       ~@method-forms
        (com.phronemophobic.grease/register-objc-class! ~cls-sym)
        (def ~class-name ~cls-sym))))
