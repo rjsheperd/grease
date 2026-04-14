@@ -4,33 +4,41 @@
   All low-level FFI calls (get-objc-class, allocate-objc-class!, make-imp, …)
   are compiled functions in com.phronemophobic.grease and exposed via
   sci/copy-var.  This namespace provides a higher-level defclass macro that
-  assembles them into a usable interface.
+  assembles them into a usable interface, plus a msg-send helper for invoking
+  ObjC methods from SCI.
+
+  NOTE: The objcjure `objc` macro cannot be used from SCI for selectors that
+  contain colons (e.g. `setDelegate:`).  SCI's symbol parser rejects them.
+  Use `msg-send` instead.
 
   Example:
 
     (require '[grease.ios.objc :as objc-rt])
     (require '[com.phronemophobic.grease :as grease])
-    (require '[com.phronemophobic.objcjure :refer [objc]])
 
     (def last-location (atom nil))
+    (def held-mgr      (atom nil))
     (def held-delegate (atom nil))
 
     (objc-rt/defclass LocationDelegate \"NSObject\"
       \"locationManager:didUpdateLocations:\" \"v@:@@\"
-      (fn [self _cmd mgr locs]
+      (fn [_self _cmd _mgr locs]
         (reset! last-location locs)))
 
     (grease/dispatch-main-async
-      #(let [d   (objc-rt/new-instance LocationDelegate)
-             mgr (objc [CLLocationManager new])]
+      #(let [cls-mgr (grease/get-objc-class \"CLLocationManager\")
+             mgr     (grease/objc-new cls-mgr)
+             d       (objc-rt/new-instance LocationDelegate)]
+         (reset! held-mgr mgr)
          (reset! held-delegate d)
-         (objc [mgr setDelegate: d])
-         (objc [mgr requestWhenInUseAuthorization])
-         (objc [mgr startUpdatingLocation])))
+         (objc-rt/msg-send :void mgr \"setDelegate:\" :pointer d)
+         (objc-rt/msg-send :void mgr \"requestWhenInUseAuthorization\")
+         (objc-rt/msg-send :void mgr \"startUpdatingLocation\")))
 
     ;; After granting permission on device:
     @last-location  ;; => non-nil CLLocation pointer"
-  (:require [com.phronemophobic.grease :as grease]))
+  (:require [com.phronemophobic.clj-libffi :as ffi]
+            [com.phronemophobic.grease :as grease]))
 
 ;; =============================================================================
 ;; ObjC type encoding reference
@@ -55,6 +63,31 @@
               (grease/get-objc-class cls-or-name)
               cls-or-name)]
     (grease/objc-new cls)))
+
+(defn msg-send
+  "Sends an ObjC message to obj using the selector named by sel-str.
+
+  Use this instead of the `objcjure/objc` macro when calling from the SCI
+  nREPL — SCI's symbol parser rejects selectors containing colons, so the
+  `objc` macro is unusable for multi-part selectors like `setDelegate:`.
+
+  ret-type   — return type keyword: :void :pointer :int64 :int32 etc.
+  obj        — ObjC object pointer (e.g. from objc-new or new-instance)
+  sel-str    — selector string e.g. \"setDelegate:\" \"startUpdatingLocation\"
+  typed-args — flat alternating pairs of type-keyword and value for each
+               extra argument beyond self and _cmd, e.g.:
+               :pointer delegate-ptr
+
+  Examples:
+    (msg-send :void mgr \"setDelegate:\" :pointer d)
+    (msg-send :void mgr \"requestWhenInUseAuthorization\")
+    (msg-send :pointer view \"layer\")"
+  [ret-type obj sel-str & typed-args]
+  (let [sel (grease/register-objc-sel sel-str)]
+    (apply ffi/call
+           "objc_msgSend" ret-type
+           :pointer obj :pointer sel
+           typed-args)))
 
 (defn- parse-extra-arg-types
   "Infers extra-arg-types (beyond self + _cmd) from a type-encoding string.
@@ -101,18 +134,24 @@
   Type encodings:
     v = void   @ = id/object   : = SEL   q = long long   i = int"
   [class-name superclass & method-specs]
+  ;; NOTE: Use fully-qualified names throughout the syntax-quote template.
+  ;; SCI evaluates macro syntax-quote at expansion time (not definition time),
+  ;; so namespace aliases like `grease/` are resolved in the CALLING namespace,
+  ;; not the defining namespace.  Fully-qualified names work in any namespace.
   (let [cls-sym (gensym "cls")]
-    `(let [~cls-sym (grease/allocate-objc-class! ~(str class-name)
-                                                 (grease/get-objc-class ~superclass))]
+    `(let [~cls-sym (com.phronemophobic.grease/allocate-objc-class!
+                     ~(str class-name)
+                     (com.phronemophobic.grease/get-objc-class ~superclass))]
        ~@(for [[sel-str enc f] (partition 3 method-specs)]
            (let [extra-sym (gensym "extra-types")
                  ret-sym   (gensym "ret-type")
                  imp-sym   (gensym "imp")
                  sel-sym   (gensym "sel")]
-             `(let [~extra-sym (parse-extra-arg-types ~enc)
-                    ~ret-sym   (ret-type-from-encoding ~enc)
-                    ~imp-sym   (grease/make-imp ~f ~extra-sym ~ret-sym)
-                    ~sel-sym   (grease/register-objc-sel ~sel-str)]
-                (grease/add-objc-method! ~cls-sym ~sel-sym ~imp-sym ~enc))))
-       (grease/register-objc-class! ~cls-sym)
+             `(let [~extra-sym (grease.ios.objc/parse-extra-arg-types ~enc)
+                    ~ret-sym   (grease.ios.objc/ret-type-from-encoding ~enc)
+                    ~imp-sym   (com.phronemophobic.grease/make-imp ~f ~extra-sym ~ret-sym)
+                    ~sel-sym   (com.phronemophobic.grease/register-objc-sel ~sel-str)]
+                (com.phronemophobic.grease/add-objc-method!
+                 ~cls-sym ~sel-sym ~imp-sym ~enc))))
+       (com.phronemophobic.grease/register-objc-class! ~cls-sym)
        (def ~class-name ~cls-sym))))
