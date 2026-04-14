@@ -204,33 +204,33 @@
        :namespaces
        (merge
          ;; objcjure -- expose all public vars, rebind `objc` to SCI-aware wrapper
-         (let [ns-map (scify/ns->ns-map 'com.phronemophobic.objcjure)
-               sci-ns (-> ns-map first val first val meta :ns)]
-           (assoc-in ns-map
-                     ['com.phronemophobic.objcjure 'objc]
-                     (sci/new-var 'objc @#'objc-wrapper
-                                  (assoc (meta #'objcjure/objc) :ns sci-ns))))
+        (let [ns-map (scify/ns->ns-map 'com.phronemophobic.objcjure)
+              sci-ns (-> ns-map first val first val meta :ns)]
+          (assoc-in ns-map
+                    ['com.phronemophobic.objcjure 'objc]
+                    (sci/new-var 'objc @#'objc-wrapper
+                                 (assoc (meta #'objcjure/objc) :ns sci-ns))))
 
          ;; clj-libffi -- ffi/call, ffi/dlsym, blocks, callbacks
-         (scify/ns->ns-map 'com.phronemophobic.clj-libffi)
-         (scify/ns->ns-map 'com.phronemophobic.clj-libffi.callback)
+        (scify/ns->ns-map 'com.phronemophobic.clj-libffi)
+        (scify/ns->ns-map 'com.phronemophobic.clj-libffi.callback)
 
          ;; dtype FFI helpers
-         (scify/ns->ns-map 'tech.v3.datatype.ffi)
+        (scify/ns->ns-map 'tech.v3.datatype.ffi)
 
          ;; grease namespace — dispatch-main-async, get-addresses, ObjC class builder
-         (let [ns-name 'com.phronemophobic.grease
-               sci-ns  (sci/create-ns ns-name nil)]
-           {ns-name {'dispatch-main-async  (sci/copy-var dispatch-main-async sci-ns)
-                     'get-addresses        (sci/copy-var get-addresses sci-ns)
-                     'get-objc-class       (sci/copy-var get-objc-class sci-ns)
-                     'allocate-objc-class! (sci/copy-var allocate-objc-class! sci-ns)
-                     'register-objc-class! (sci/copy-var register-objc-class! sci-ns)
-                     'register-objc-sel    (sci/copy-var register-objc-sel sci-ns)
-                     'add-objc-method!     (sci/copy-var add-objc-method! sci-ns)
-                     'objc-new             (sci/copy-var objc-new sci-ns)
-                     'make-imp             (sci/copy-var make-imp sci-ns)
-                     'live-imps            (sci/copy-var live-imps sci-ns)}}))}
+        (let [ns-name 'com.phronemophobic.grease
+              sci-ns  (sci/create-ns ns-name nil)]
+          {ns-name {'dispatch-main-async  (sci/copy-var dispatch-main-async sci-ns)
+                    'get-addresses        (sci/copy-var get-addresses sci-ns)
+                    'get-objc-class       (sci/copy-var get-objc-class sci-ns)
+                    'allocate-objc-class! (sci/copy-var allocate-objc-class! sci-ns)
+                    'register-objc-class! (sci/copy-var register-objc-class! sci-ns)
+                    'register-objc-sel    (sci/copy-var register-objc-sel sci-ns)
+                    'add-objc-method!     (sci/copy-var add-objc-method! sci-ns)
+                    'objc-new             (sci/copy-var objc-new sci-ns)
+                    'make-imp             (sci/copy-var make-imp sci-ns)
+                    'live-imps            (sci/copy-var live-imps sci-ns)}}))}
       addons/future))
 
 (def ^:private sci-ctx
@@ -238,8 +238,10 @@
     (let [ctx (sci/init opts)]
       (sci/alter-var-root sci/out (constantly *out*))
       (sci/alter-var-root sci/err (constantly *err*))
-      ;; Pre-load grease.ios.objc so (require '[grease.ios.objc]) works from nREPL.
+      ;; Pre-load grease.ios.* so they are available from nREPL without rebuild.
       (when-let [src (io/resource "grease/ios/objc.clj")]
+        (sci/eval-string* ctx (slurp src)))
+      (when-let [src (io/resource "grease/ios/foundation.clj")]
         (sci/eval-string* ctx (slurp src)))
       ctx)))
 
