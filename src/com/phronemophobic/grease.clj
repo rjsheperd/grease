@@ -114,6 +114,78 @@
                                   (catch Exception e (println e)))))))
 
 ;; =============================================================================
+;; ObjC runtime — class builder primitives
+;;
+;; ffi/call and clj-libffi.callback/make-callback use primitive type-hinted
+;; dispatch that SCI cannot execute.  These thin wrappers are compiled into
+;; the native image and exposed as sci/copy-var entries so that nREPL sessions
+;; can define ObjC classes and method implementations at runtime.
+;; =============================================================================
+
+;; Prevent GC of live ffi_closure objects.  make-imp stores every closure here.
+(def ^:private live-imps (atom []))
+
+(defn get-objc-class
+  "Returns the ObjC Class object for class-name, or nil if not found."
+  [class-name]
+  (ffi/call "objc_getClass" :pointer :pointer (dt-ffi/string->c class-name)))
+
+(defn allocate-objc-class!
+  "Allocates a new ObjC class pair (does not register it yet).
+  superclass: pointer returned by get-objc-class."
+  [^String class-name superclass]
+  (ffi/call "objc_allocateClassPair" :pointer
+            :pointer superclass :pointer (dt-ffi/string->c class-name) :int64 0))
+
+(defn register-objc-class!
+  "Finalises and registers a class created by allocate-objc-class!.
+  No methods may be added after this call."
+  [cls]
+  (ffi/call "objc_registerClassPair" :void :pointer cls))
+
+(defn register-objc-sel
+  "Returns the SEL for selector-str, registering it if necessary."
+  [^String selector-str]
+  (ffi/call "sel_registerName" :pointer :pointer (dt-ffi/string->c selector-str)))
+
+(defn add-objc-method!
+  "Adds an IMP to cls for the given selector.
+  sel: SEL pointer from register-objc-sel.
+  imp: function pointer from make-imp.
+  type-encoding: ObjC type encoding string e.g. \"v@:\" \"v@:@@\"."
+  [cls sel imp ^String type-encoding]
+  (ffi/call "class_addMethod" :int8
+            :pointer cls :pointer sel :pointer imp :pointer (dt-ffi/string->c type-encoding)))
+
+(defn objc-new
+  "Sends +new to cls, returning the new instance pointer."
+  [cls]
+  (let [sel (register-objc-sel "new")]
+    (ffi/call "objc_msgSend" :pointer :pointer cls :pointer sel)))
+
+(defn make-imp
+  "Wraps f in an FFI closure suitable for use as an ObjC method implementation.
+
+  f receives (self _cmd & extra-args) as Clojure values (raw pointer longs).
+  extra-arg-types: seq of dtype-next type keywords for any args beyond self/cmd
+                   e.g. [] for a no-arg method, [:pointer :pointer] for two
+                   object args.
+  ret-type: dtype-next type keyword for the return, usually :void.
+
+  The returned value is a Pointer to executable code; store it (or use
+  live-imps) to prevent GC."
+  [f extra-arg-types ret-type]
+  ;; ObjC IMPs always receive self (id) and _cmd (SEL) as the first two args.
+  ;; Use requiring-resolve to avoid top-level require of clj-libffi.callback,
+  ;; which would capture stale native handles at build time under
+  ;; --initialize-at-build-time=com.phronemophobic.
+  (let [make-callback (requiring-resolve 'com.phronemophobic.clj-libffi.callback/make-callback)
+        all-arg-types (into [:pointer :pointer] extra-arg-types)
+        imp (make-callback f ret-type all-arg-types)]
+    (swap! live-imps conj imp)
+    imp))
+
+;; =============================================================================
 ;; objc macro wrapper -- makes (objc [...]) SCI-context-aware
 ;; =============================================================================
 
@@ -146,11 +218,19 @@
          ;; dtype FFI helpers
          (scify/ns->ns-map 'tech.v3.datatype.ffi)
 
-         ;; grease namespace -- dispatch-main-async, get-addresses
+         ;; grease namespace — dispatch-main-async, get-addresses, ObjC class builder
          (let [ns-name 'com.phronemophobic.grease
                sci-ns  (sci/create-ns ns-name nil)]
-           {ns-name {'dispatch-main-async (sci/copy-var dispatch-main-async sci-ns)
-                     'get-addresses       (sci/copy-var get-addresses sci-ns)}}))}
+           {ns-name {'dispatch-main-async  (sci/copy-var dispatch-main-async sci-ns)
+                     'get-addresses        (sci/copy-var get-addresses sci-ns)
+                     'get-objc-class       (sci/copy-var get-objc-class sci-ns)
+                     'allocate-objc-class! (sci/copy-var allocate-objc-class! sci-ns)
+                     'register-objc-class! (sci/copy-var register-objc-class! sci-ns)
+                     'register-objc-sel    (sci/copy-var register-objc-sel sci-ns)
+                     'add-objc-method!     (sci/copy-var add-objc-method! sci-ns)
+                     'objc-new             (sci/copy-var objc-new sci-ns)
+                     'make-imp             (sci/copy-var make-imp sci-ns)
+                     'live-imps            (sci/copy-var live-imps sci-ns)}}))}
       addons/future))
 
 (def ^:private sci-ctx
@@ -158,6 +238,9 @@
     (let [ctx (sci/init opts)]
       (sci/alter-var-root sci/out (constantly *out*))
       (sci/alter-var-root sci/err (constantly *err*))
+      ;; Pre-load grease.ios.objc so (require '[grease.ios.objc]) works from nREPL.
+      (when-let [src (io/resource "grease/ios/objc.clj")]
+        (sci/eval-string* ctx (slurp src)))
       ctx)))
 
 ;; =============================================================================

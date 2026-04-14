@@ -37,6 +37,14 @@
 			</array>
 		</dict>
 	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used for Clojure nREPL location experiments.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Used for Clojure nREPL Bluetooth experiments.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Used for Clojure nREPL camera experiments.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Used for Clojure nREPL microphone experiments.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

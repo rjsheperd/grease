@@ -45,6 +45,7 @@
            :main 'com.phronemophobic.grease.ios}))
 
 (defn uberjar-basic [opts]
+  (b/delete {:path class-dir})
   (b/copy-dir {:src-dirs ["src" "resources"]
                :target-dir class-dir})
   (b/compile-clj {:class-dir class-dir

@@ -203,7 +203,7 @@ time "$NATIVE_IMAGE" \
     -H:+AllowIncompleteClasspath \
     --report-unsupported-elements-at-runtime \
     --initialize-at-build-time=clojure,clj_commons,com.phronemophobic,edamame,edamame.impl,babashka,bencode,ham_fisted,insn,sci,tech.v3,tech.v3.datatype,tech.v3.datatype.ffi,"ham_fisted.ParallelOptions\$CatParallelism" \
-    --initialize-at-run-time=com.phronemophobic.grease.interface \
+    --initialize-at-run-time=com.phronemophobic.grease.interface,com.phronemophobic.clj_libffi.callback \
     -H:ClassInitialization="$HF_REIFY_BT" \
     -H:Name=bb \
     -H:Path="$OUT_DIR" \

@@ -1373,5 +1373,23 @@
     "allDeclaredConstructors": true,
     "allPublicMethods": true,
     "allDeclaredMethods": true
+  },
+  {
+    "name": "tech.v3.datatype.ffi.ptr_value__init",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true,
+    "allPublicFields": true
+  },
+  {
+    "name": "tech.v3.datatype.ffi.graalvm_runtime__init",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true,
+    "allPublicFields": true
   }
 ]
