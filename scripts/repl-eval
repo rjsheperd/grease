@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# repl-eval — evaluate a Clojure form against the device nREPL.
+#
+# Usage:
+#   scripts/repl-eval '(+ 1 2)'
+#   scripts/repl-eval '(require (quote [grease.ios.repl :as r])) (r/class-name-of (grease.ios.foundation/->nsstring "hi"))'
+#
+# The device must be running (debug-demo-app --noinstall) with nREPL on
+# 192.168.0.111:23456 before calling this script.
+# Override host/port via NREPL_HOST / NREPL_PORT env vars.
+
+set -euo pipefail
+
+CODE="${1:-}"
+if [[ -z "$CODE" ]]; then
+  echo "Usage: scripts/repl-eval '<clojure-form>'" >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+exec clj \
+  -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' \
+  -M "${SCRIPT_DIR}/repl_eval.clj" "$CODE"
