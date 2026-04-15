@@ -414,7 +414,7 @@ when passed a class pointer. Instance-method coverage requires
 ;; => true
 #+end_src
 
-* Phase 8 — Swift Interop [2/3]
+* Phase 8 — Swift Interop [3/3] :DONE:
 
 Swift classes marked ~@objc~ (or inheriting from ~NSObject~) are visible in
 the ObjC runtime. The same ~defclass~ / ~msg-send~ patterns apply directly.
@@ -464,10 +464,32 @@ Confirmed round-trip:
 {:before "No message yet", :after "Hello from Clojure REPL!"}
 #+end_src
 
-** TODO 8.3 Swift actors and async/await bridge
+** DONE 8.3 Swift actors and async/await bridge
 
-Swift ~async/await~ is not ObjC-accessible. Wrapper pattern: expose
-synchronous ~@objc~ entry points that dispatch into actors internally.
+Pattern: synchronous ~@objc~ entry point dispatches a Swift ~Task~ internally;
+result written to ~GreaseHook.message~ which Clojure reads via ~msg-send~.
+No new block type needed — avoids C shim additions.
+
+Added ~fetchURL:~ to ~GreaseHook.swift~:
+#+begin_src swift
+@objc func fetchURL(_ urlString: String) {
+    message = "Fetching \(urlString)..."
+    Task {
+        let (data, resp) = try await URLSession.shared.data(from: url)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        message = "HTTP \(status): \(String(data.prefix(200)))"
+    }
+}
+#+end_src
+
+REPL test (proven on-device):
+#+begin_src clojure
+(let [hook (objc-rt/msg-send :pointer (get-class "GreaseHook") "shared")]
+  (objc-rt/msg-send :void hook "fetchURL:" :pointer (f/->nsstring "https://example.com"))
+  (deref (promise) 4000 nil)
+  (f/nsstring->str (objc-rt/msg-send :pointer hook "message")))
+;; => "HTTP 200: <!doctype html><html lang=\"en\">..."
+#+end_src
 
 * Phase 9 — Build Pipeline Improvements
 
