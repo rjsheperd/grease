@@ -89,13 +89,13 @@ Colon-containing selectors flattened first:
 
 Gate: every ~:examples~ pair passes ~->clj~ and ~->objc~ round-trip.
 
-** TODO 0.4 Spec loader — ~Foundation.edn~ + ~grease.ios.spec~ + ~grease.ios.registry~
+** DONE 0.4 Spec loader — ~Foundation.edn~ + ~grease.ios.spec~ + ~grease.ios.registry~
 
 Hand-write ~resources/grease/api-specs/Foundation.edn~ covering exactly the
 classes in the oracle ~grease.ios.foundation~:
 
 Classes: NSString, NSNumber, NSArray, NSMutableArray, NSDictionary,
-NSMutableDictionary, NSError.
+NSMutableDictionary, NSURL, NSError (plus CString type added to types.edn).
 
 Implement ~grease.ios.spec~ (loader + validator) and ~grease.ios.registry~
 (three atoms: spec-registry, class-index, retention-table).
@@ -116,6 +116,8 @@ Implement ~grease.ios.spec~ (loader + validator) and ~grease.ios.registry~
 
 Gate: ~(spec/load-all)~ returns Foundation entry;
 ~(registry/class-spec "NSString")~ returns expected map.
+
+Results: 25 tests, 72 assertions (spec+registry); 55 total across all suites, 0 failures.
 
 ** TODO 0.5 Invoke + API — ~grease.ios.invoke~ + ~grease.ios.api~
 

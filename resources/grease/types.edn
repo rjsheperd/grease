@@ -109,4 +109,10 @@
  {:encoding ":"
   :clj :pointer
   :coerce-in  clojure.core/identity
+  :coerce-out clojure.core/identity}
+
+ "CString"
+ {:encoding "*"
+  :clj :pointer
+  :coerce-in  clojure.core/identity
   :coerce-out clojure.core/identity}}

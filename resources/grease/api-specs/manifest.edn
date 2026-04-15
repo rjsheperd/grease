@@ -1,0 +1,5 @@
+;; Manifest of all EDN framework specs in resources/grease/api-specs/.
+;; io/resource cannot enumerate a directory from a JAR, so this file
+;; is the authoritative list.  The scraper updates it automatically.
+
+{:specs ["grease/api-specs/Foundation.edn"]}

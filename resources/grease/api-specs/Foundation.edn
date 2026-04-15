@@ -1,0 +1,155 @@
+;; Foundation framework spec — hand-written oracle.
+;;
+;; Reference implementation: grease.ios.foundation
+;; Classes covered: NSString, NSNumber, NSArray, NSMutableArray,
+;;                  NSDictionary, NSMutableDictionary, NSURL, NSError
+;;
+;; :init    — methods sent to the *class* object (factory/class-level constructors)
+;; :methods — methods sent to an *instance*
+;;
+;; :encoding uses ObjC type encoding strings (see grease.ios.objc docs):
+;;   v=void  @=id/object  :=SEL  q=int64  Q=uint64
+;;   d=double  f=float  *=C-string
+;;
+;; All :type values must resolve in resources/grease/types.edn or be
+;; a class name defined in a loaded spec.
+
+{:framework "Foundation"
+ :doc-url   "https://developer.apple.com/documentation/foundation"
+
+ :classes
+ [{:name       "NSString"
+   :superclass "NSObject"
+   :init
+   [{:selector "stringWithUTF8String:"
+     :encoding "@@:*"
+     :args     [{:name "str" :type "CString" :nullable false}]
+     :return   "NSString"}]
+   :methods
+   [{:selector "UTF8String"
+     :encoding "*@:"
+     :args     []
+     :return   "CString"}
+    {:selector "length"
+     :encoding "Q@:"
+     :args     []
+     :return   "NSUInteger"}
+    {:selector "stringByAppendingString:"
+     :encoding "@@:@"
+     :args     [{:name "str" :type "NSString" :nullable false}]
+     :return   "NSString"}]
+   :properties []}
+
+  {:name       "NSNumber"
+   :superclass "NSObject"
+   :init
+   [{:selector "numberWithLongLong:"
+     :encoding "@@:q"
+     :args     [{:name "value" :type "NSInteger" :nullable false}]
+     :return   "NSNumber"}
+    {:selector "numberWithDouble:"
+     :encoding "@@:d"
+     :args     [{:name "value" :type "Double" :nullable false}]
+     :return   "NSNumber"}]
+   :methods
+   [{:selector "longLongValue"
+     :encoding "q@:"
+     :args     []
+     :return   "NSInteger"}
+    {:selector "doubleValue"
+     :encoding "d@:"
+     :args     []
+     :return   "Double"}]
+   :properties []}
+
+  {:name       "NSArray"
+   :superclass "NSObject"
+   :init       []
+   :methods
+   [{:selector "count"
+     :encoding "Q@:"
+     :args     []
+     :return   "NSUInteger"}
+    {:selector "objectAtIndex:"
+     :encoding "@@:Q"
+     :args     [{:name "index" :type "NSUInteger" :nullable false}]
+     :return   "id"}]
+   :properties []}
+
+  {:name       "NSMutableArray"
+   :superclass "NSArray"
+   :init
+   [{:selector "array"
+     :encoding "@@:"
+     :args     []
+     :return   "NSMutableArray"}]
+   :methods
+   [{:selector "addObject:"
+     :encoding "v@:@"
+     :args     [{:name "object" :type "id" :nullable false}]
+     :return   "void"}]
+   :properties []}
+
+  {:name       "NSDictionary"
+   :superclass "NSObject"
+   :init       []
+   :methods
+   [{:selector "allKeys"
+     :encoding "@@:"
+     :args     []
+     :return   "NSArray"}
+    {:selector "objectForKey:"
+     :encoding "@@:@"
+     :args     [{:name "key" :type "id" :nullable true}]
+     :return   "id"}]
+   :properties []}
+
+  {:name       "NSMutableDictionary"
+   :superclass "NSDictionary"
+   :init
+   [{:selector "dictionary"
+     :encoding "@@:"
+     :args     []
+     :return   "NSMutableDictionary"}]
+   :methods
+   [{:selector "setObject:forKey:"
+     :encoding "v@:@@"
+     :args     [{:name "object" :type "id" :nullable false}
+                {:name "key"    :type "id" :nullable false}]
+     :return   "void"}]
+   :properties []}
+
+  {:name       "NSURL"
+   :superclass "NSObject"
+   :init
+   [{:selector "URLWithString:"
+     :encoding "@@:@"
+     :args     [{:name "string" :type "NSString" :nullable false}]
+     :return   "NSURL"}]
+   :methods
+   [{:selector "absoluteString"
+     :encoding "@@:"
+     :args     []
+     :return   "NSString"}]
+   :properties []}
+
+  {:name       "NSError"
+   :superclass "NSObject"
+   :init       []
+   :methods
+   [{:selector "domain"
+     :encoding "@@:"
+     :args     []
+     :return   "NSString"}
+    {:selector "code"
+     :encoding "q@:"
+     :args     []
+     :return   "NSInteger"}
+    {:selector "localizedDescription"
+     :encoding "@@:"
+     :args     []
+     :return   "NSString"}]
+   :properties []}]
+
+ :enums     []
+ :constants []}
