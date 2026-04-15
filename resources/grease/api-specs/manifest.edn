@@ -4,4 +4,5 @@
 
 {:specs ["grease/api-specs/Foundation.edn"
           "grease/api-specs/CoreLocation.edn"
-          "grease/api-specs/AVFoundation.edn"]}
+          "grease/api-specs/AVFoundation.edn"
+          "grease/api-specs/UIKit.edn"]}

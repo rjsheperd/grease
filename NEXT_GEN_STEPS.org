@@ -304,7 +304,7 @@ Key methods (camera path):
 Oracle: ~src/grease/ios/uikit.clj~
 Spec: ~resources/grease/api-specs/UIKit.edn~
 
-** TODO 4.1 Write UIKit.edn
+** DONE 4.1 Write UIKit.edn
 
 Note: UIKit structs (CGRect, CGPoint) are v1 UNSUPPORTED.
 Use the existing C shims (~grease_set_frame~, ~grease_get_frame_x~, etc.)

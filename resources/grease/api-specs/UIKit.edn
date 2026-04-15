@@ -1,0 +1,193 @@
+;; UIKit framework spec — hand-written oracle.
+;;
+;; Reference implementation: src/grease/ios/uikit.clj
+;; Classes covered: UIApplication, UIWindow, UIViewController, UIView,
+;;                  UILabel, UIFont, UIColor
+;;
+;; IMPORTANT — CGRect/CGPoint structs are NOT supported via plain objc_msgSend.
+;; Use the C shims in Bridge.m (grease_set_frame, grease_get_frame_x, etc.)
+;; via ffi/call instead.  Frame and geometry operations are NOT in this spec.
+;;
+;; All UIKit methods must run on the main thread.
+
+{:framework "UIKit"
+ :doc-url   "https://developer.apple.com/documentation/uikit"
+
+ :classes
+ [{:name         "UIApplication"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "sharedApplication"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :doc      "Returns the shared UIApplication singleton"}]
+   :methods
+   [{:selector "keyWindow"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :main-thread? true
+     :doc      "Returns the application's key UIWindow"}]
+   :properties []}
+
+  {:name         "UIWindow"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init         []
+   :methods
+   [{:selector "rootViewController"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :main-thread? true}]
+   :properties []}
+
+  {:name         "UIViewController"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init         []
+   :methods
+   [{:selector "view"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :main-thread? true}]
+   :properties []}
+
+  {:name         "UIView"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init         []
+   :methods
+   [{:selector "subviews"
+     :encoding "@@:"
+     :args     []
+     :return   "NSArray"
+     :main-thread? true}
+    {:selector "addSubview:"
+     :encoding "v@:@"
+     :args     [{:name "view" :type "id" :nullable false}]
+     :return   "void"
+     :main-thread? true}
+    {:selector "removeFromSuperview"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "setBackgroundColor:"
+     :encoding "v@:@"
+     :args     [{:name "color" :type "id" :nullable true}]
+     :return   "void"
+     :main-thread? true}]
+   :properties []}
+
+  {:name         "UILabel"
+   :superclass   "UIView"
+   :main-thread? true
+   :init
+   [{:selector "new"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :doc      "Creates a new UILabel instance"}]
+   :methods
+   [{:selector "text"
+     :encoding "@@:"
+     :args     []
+     :return   "NSString"
+     :main-thread? true}
+    {:selector "setText:"
+     :encoding "v@:@"
+     :args     [{:name "text" :type "NSString" :nullable true}]
+     :return   "void"
+     :main-thread? true}
+    {:selector "setTextColor:"
+     :encoding "v@:@"
+     :args     [{:name "color" :type "id" :nullable false}]
+     :return   "void"
+     :main-thread? true}
+    {:selector "font"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :main-thread? true}
+    {:selector "setFont:"
+     :encoding "v@:@"
+     :args     [{:name "font" :type "id" :nullable false}]
+     :return   "void"
+     :main-thread? true}
+    {:selector "setTextAlignment:"
+     :encoding "v@:q"
+     :args     [{:name "alignment" :type "NSInteger" :nullable false
+                 :doc  "NSTextAlignment: 0=left 1=center 2=right 3=justified 4=natural"}]
+     :return   "void"
+     :main-thread? true}]
+   :properties []}
+
+  {:name         "UIFont"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "fontWithName:size:"
+     :encoding "@@:@d"
+     :args     [{:name "fontName" :type "NSString" :nullable false}
+                {:name "fontSize"  :type "Double"    :nullable false}]
+     :return   "id"
+     :doc      "Returns UIFont for given name and size, or nil if not found"}
+    {:selector "systemFontOfSize:"
+     :encoding "@@:d"
+     :args     [{:name "fontSize" :type "Double" :nullable false}]
+     :return   "id"
+     :doc      "Returns the system font at given point size"}]
+   :methods
+   [{:selector "fontName"
+     :encoding "@@:"
+     :args     []
+     :return   "NSString"}
+    {:selector "pointSize"
+     :encoding "d@:"
+     :args     []
+     :return   "Double"}]
+   :properties []}
+
+  {:name         "UIColor"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "colorWithRed:green:blue:alpha:"
+     :encoding "@@:dddd"
+     :args     [{:name "red"   :type "Double" :nullable false}
+                {:name "green" :type "Double" :nullable false}
+                {:name "blue"  :type "Double" :nullable false}
+                {:name "alpha" :type "Double" :nullable false}]
+     :return   "id"
+     :doc      "Creates UIColor from RGBA components 0.0-1.0"}
+    {:selector "whiteColor"
+     :encoding "@@:"
+     :args     []
+     :return   "id"}
+    {:selector "blackColor"
+     :encoding "@@:"
+     :args     []
+     :return   "id"}
+    {:selector "clearColor"
+     :encoding "@@:"
+     :args     []
+     :return   "id"}]
+   :methods    []
+   :properties []}]
+
+ :protocols []
+
+ :enums
+ [{:name   "NSTextAlignment"
+   :values
+   [{:name "NSTextAlignmentLeft"      :raw 0}
+    {:name "NSTextAlignmentCenter"    :raw 1}
+    {:name "NSTextAlignmentRight"     :raw 2}
+    {:name "NSTextAlignmentJustified" :raw 3}
+    {:name "NSTextAlignmentNatural"   :raw 4}]}]
+
+ :constants []}
