@@ -215,18 +215,127 @@ All 10 functions/method groups are covered. NSURL and NSNumber extras included.
 
 ** TODO 1.2 On-device validation via REPL
 
+The engine namespaces (~grease.ios.types~, ~naming~, ~spec~, ~registry~,
+~invoke~, ~patterns~, ~api~) pass all JVM tests but are never added to the
+SCI preload block in ~grease.clj~.  The pre-loaded set currently stops at
+~camera.clj~ (line 254).  These sub-tasks wire the engine into SCI and
+validate it on device.
+
 #+begin_src bash
-scripts/repl-eval '
-(require (quote [grease.ios.api :as ios]))
-(ios/load!)
-;; NSString round-trip
-(let [s (ios/make :string "hello world")]
-  (ios/call s :utf8-string))
-;; => "hello world"
-'
+;; Goal: this works on device after the sub-tasks below are complete
+clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' -M tests/test_engine.clj
 #+end_src
 
 Gate: every Foundation operation via engine matches oracle output.
+
+*** TODO 1.2.1 Audit engine namespaces for SCI compatibility
+
+Read each of the seven engine source files and flag any form that cannot
+execute in a frozen SCI native image.  Known risks:
+
+| Namespace              | Risk                    | Notes                                    |
+|------------------------+-------------------------+------------------------------------------|
+| ~grease.ios.types~     | ~requiring-resolve~     | Resolves coercer symbols lazily at call  |
+| ~grease.ios.naming~    | ~defmulti~/~defmethod~  | SCI supports both — low risk             |
+| ~grease.ios.spec~      | ~clojure.java.io/resource~ + ~slurp~ | ~io/resource~ available in SCI |
+| ~grease.ios.registry~  | none obvious            | Pure atoms and maps                      |
+| ~grease.ios.invoke~    | none obvious            | Uses already-loaded ~objc/msg-send~      |
+| ~grease.ios.patterns~  | ~defclass!~ via objc-rt | objc-rt already in SCI context           |
+| ~grease.ios.api~       | ~requiring-resolve~ (via types) | Same risk as types               |
+
+Deliverable: annotated list (comments in source or a REPL log) of every
+form that needs fixing before Step 1.2.2.
+
+*** TODO 1.2.2 Fix ~requiring-resolve~ in ~grease.ios.types~
+
+~requiring-resolve~ triggers a runtime classloader call that fails in a
+frozen GraalVM native image.  The coercer symbols (e.g.
+~grease.ios.foundation/->nsstring~) must be resolved a different way.
+
+Options (pick the simplest that passes JVM tests):
+- Replace ~requiring-resolve~ with plain ~resolve~: namespaces are already
+  eval'd into SCI before ~types.clj~ loads, so ~resolve~ suffices.
+- Wrap the resolution in a ~delay~ initialised on first use instead of at
+  namespace load time.
+
+Gate: all existing ~types_test.clj~ assertions pass; no ~requiring-resolve~
+calls remain in ~grease.ios.types~.
+
+*** TODO 1.2.3 Add engine namespaces to the SCI preload block
+
+In ~src/com/phronemophobic/grease.clj~, extend the ~sci-ctx~ delay block
+(currently line ~242~) to eval the engine in strict dependency order after
+~camera.clj~:
+
+#+begin_src clojure
+;; Engine — data-driven API (dependency order)
+(doseq [path ["grease/ios/types.clj"
+              "grease/ios/naming.clj"
+              "grease/ios/spec.clj"
+              "grease/ios/registry.clj"
+              "grease/ios/invoke.clj"
+              "grease/ios/patterns.clj"
+              "grease/ios/api.clj"]]
+  (when-let [src (io/resource path)]
+    (sci/eval-string* ctx (slurp src))))
+#+end_src
+
+Gate: app starts without error; ~(require '[grease.ios.api :as ios])~ in
+the nREPL returns without "Could not find namespace".
+
+*** TODO 1.2.4 Auto-load specs at startup
+
+Decide eager vs. lazy spec loading and implement.  Recommendation: eager —
+call ~(grease.ios.spec/load-all)~ inside the ~sci-ctx~ delay block
+immediately after the engine preloads.  Adds ~1s to app startup but makes
+~(ios/call ...)~ work without a manual ~(ios/load!)~.
+
+#+begin_src clojure
+;; After engine preloads:
+(sci/eval-string* ctx "(grease.ios.spec/load-all)")
+#+end_src
+
+Gate: fresh nREPL session can call ~(grease.ios.api/call ...)~ immediately,
+without first calling ~(ios/load!)~.
+
+*** TODO 1.2.5 Write ~tests/test_engine.clj~
+
+Clojure integration test (follows ~tests/test_runner.clj~ pattern) covering:
+
+#+begin_src clojure
+;; 1. NSString round-trip via engine
+(= "hello world"
+   (ios/call (ios/make :string "hello world") :utf8-string))
+
+;; 2. NSNumber long via engine
+(= 42 (ios/call (ios/make :number-long 42) :long-long-value))
+
+;; 3. NSArray count via engine
+(= 3 (ios/call (ios/make :array [(ios/make :string "a")
+                                  (ios/make :string "b")
+                                  (ios/make :string "c")]) :count))
+
+;; 4. Enum lookup
+(= 1 (ios/enum :av-player-status :ready-to-play))
+
+;; 5. CLLocationManager instantiation (no GPS wait needed)
+(some? (ios/make :location-manager))
+#+end_src
+
+Gate: all 5 assertions pass via ~clj -M tests/test_engine.clj~.
+
+*** TODO 1.2.6 Rebuild, deploy, and run test
+
+#+begin_src bash
+USE_CAP_CACHE=use ./scripts/build-bb-o
+direnv exec . ./scripts/build-demo-app
+pkill -f ios-deploy 2>/dev/null; ./scripts/deploy-demo-app
+./scripts/debug-demo-app --noinstall
+# In a second terminal after the nREPL banner:
+clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' -M tests/test_engine.clj
+#+end_src
+
+Gate: ~ALL TESTS PASSED — grease.ios.api engine~ printed; exit code 0.
 
 * Phase 2 — CoreLocation.edn (Step 9): Delegates on real hardware
 
