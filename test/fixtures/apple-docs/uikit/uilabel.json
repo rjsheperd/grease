@@ -1,0 +1,78 @@
+{
+  "metadata": {
+    "title": "UILabel",
+    "symbolKind": "cl",
+    "role": "symbol"
+  },
+  "topicSections": [
+    {
+      "title": "Creating Labels",
+      "identifiers": [
+        "doc://com.apple.documentation/documentation/uikit/uilabel/new"
+      ]
+    },
+    {
+      "title": "Accessing Text Attributes",
+      "identifiers": [
+        "doc://com.apple.documentation/documentation/uikit/uilabel/1620538-text",
+        "doc://com.apple.documentation/documentation/uikit/uilabel/1620537-settext"
+      ]
+    }
+  ],
+  "references": {
+    "doc://com.apple.documentation/documentation/uikit/uilabel/new": {
+      "title": "new",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "text",           "text": "+ ("},
+        {"kind": "typeIdentifier", "text": "instancetype"},
+        {"kind": "text",           "text": ")"},
+        {"kind": "identifier",     "text": "new"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/uikit/uilabel/1620538-text": {
+      "title": "text",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "text",           "text": "- ("},
+        {"kind": "typeIdentifier", "text": "NSString",
+         "preciseIdentifier": "c:objc(cs)NSString"},
+        {"kind": "text",           "text": " *) "},
+        {"kind": "identifier",     "text": "text"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/uikit/uilabel/1620537-settext": {
+      "title": "setText:",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "text",           "text": "- ("},
+        {"kind": "typeIdentifier", "text": "void"},
+        {"kind": "text",           "text": ") "},
+        {"kind": "identifier",     "text": "setText:"},
+        {"kind": "text",           "text": "("},
+        {"kind": "typeIdentifier", "text": "NSString",
+         "preciseIdentifier": "c:objc(cs)NSString"},
+        {"kind": "text",           "text": " *) "},
+        {"kind": "internalParam",  "text": "text"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/uikit/uilabel": {
+      "title": "UILabel",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "keyword",        "text": "@interface"},
+        {"kind": "text",           "text": " "},
+        {"kind": "identifier",     "text": "UILabel"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/uikit": {
+      "title": "UIKit",
+      "role": "collection",
+      "kind": "article"
+    }
+  }
+}

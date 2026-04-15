@@ -399,11 +399,18 @@ Fixture JSON at test/fixtures/apple-docs/ (CoreLocation framework + CLLocationMa
 Public API: fetch, framework-symbols, class-identifiers, class-doc, class-methods, fragment-text.
 *cache-dir* dynamic var enables fixture-based offline testing.
 
-** TODO 6.2 Implement ~grease.scrape.normalize~
+** DONE 6.2 Implement ~grease.scrape.normalize~
 
 Apply naming rules to scraped JSON → validated EDN.
 Every output EDN passes ~(spec/validate ...)~.
 Never hand-edit scraper output — fix the scraper.
+
+Results: 20 new tests, 51 assertions (normalize); 186 total, 643 assertions, 0 failures.
+Key files: src/grease/scrape/normalize.clj, test/grease/scrape/normalize_test.clj,
+test/fixtures/apple-docs/uikit/uilabel.json.
+Public API: build-encoding, normalize-method-ref, normalize-class-doc, framework->edn.
+ObjC type mapping table (objc->grease) covers 20 common types + id fallback.
+Known limitation: protocol-typed args (id<Protocol>) may default to "id" type.
 
 ** TODO 6.3 Scrape the framework list
 
