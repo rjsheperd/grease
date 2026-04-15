@@ -38,7 +38,8 @@
     ;; After granting permission on device:
     @last-location  ;; => non-nil CLLocation pointer"
   (:require [com.phronemophobic.clj-libffi :as ffi]
-            [com.phronemophobic.grease :as grease]))
+            [com.phronemophobic.grease :as grease]
+            [tech.v3.datatype.ffi :as dt-ffi]))
 
 ;; =============================================================================
 ;; ObjC type encoding reference
@@ -164,3 +165,32 @@
        ~@method-forms
        (com.phronemophobic.grease/register-objc-class! ~cls-sym)
        (def ~class-name ~cls-sym))))
+
+;; =============================================================================
+;; Protocol conformance
+;; =============================================================================
+
+(defn add-protocol!
+  "Marks cls as conforming to the ObjC protocol named protocol-name.
+  Returns true if the protocol was found and added, false otherwise.
+  Call after [[defclass]] but before using the class as a delegate.
+
+  Example:
+    (add-protocol! MyLocationDelegate \"CLLocationManagerDelegate\")"
+  [cls protocol-name]
+  (let [proto (ffi/call "objc_getProtocol" :pointer
+                        :pointer (dt-ffi/string->c protocol-name))]
+    (if (and proto (not= 0 (.hashCode proto)))
+      (do (ffi/call "class_addProtocol" :int8 :pointer cls :pointer proto)
+          true)
+      false)))
+
+(defn conforms-to-protocol?
+  "Returns true if cls declares conformance to the named ObjC protocol."
+  [cls protocol-name]
+  (let [proto (ffi/call "objc_getProtocol" :pointer
+                        :pointer (dt-ffi/string->c protocol-name))]
+    (if (and proto (not= 0 (.hashCode proto)))
+      (not= 0 (ffi/call "class_conformsToProtocol" :int8
+                        :pointer cls :pointer proto))
+      false)))
