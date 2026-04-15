@@ -1,10 +1,11 @@
 ;; CoreLocation framework spec — hand-written oracle.
 ;;
 ;; Reference implementation: dev/test_location.clj
-;; Classes covered: CLLocationManager
+;; Classes covered: CLLocationManager, CLLocation
 ;; Protocols: CLLocationManagerDelegate
 ;;
 ;; CLLocationManager and its delegate wiring must run on the main thread.
+;; CLLocation is immutable; created by the system and received in delegate callbacks.
 
 {:framework "CoreLocation"
  :doc-url   "https://developer.apple.com/documentation/corelocation"
@@ -34,6 +35,11 @@
      :args     []
      :return   "void"
      :main-thread? true}
+    {:selector "requestAlwaysAuthorization"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
     {:selector "setDelegate:"
      :encoding "v@:@"
      :args     [{:name     "delegate"
@@ -43,6 +49,37 @@
                  :nullable true}]
      :return   "void"
      :main-thread? true}]
+   :properties []}
+
+  {:name       "CLLocation"
+   :superclass "NSObject"
+   :init       []
+   :methods
+   [{:selector "horizontalAccuracy"
+     :encoding "d@:"
+     :args     []
+     :return   "Double"}
+    {:selector "altitude"
+     :encoding "d@:"
+     :args     []
+     :return   "Double"}
+    {:selector "speed"
+     :encoding "d@:"
+     :args     []
+     :return   "Double"}
+    {:selector "timestamp"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :doc      "Returns NSDate pointer — use NSDate methods to extract time"}
+    ;; coordinate returns a CLLocationCoordinate2D struct — not supported via
+    ;; plain objc_msgSend; use C shims (grease_location_latitude / _longitude).
+    {:selector "coordinate"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :unsupported true
+     :doc      "CLLocationCoordinate2D struct — use C shims for latitude/longitude"}]
    :properties []}]
 
  :protocols

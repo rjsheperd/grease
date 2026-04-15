@@ -1,10 +1,12 @@
 (ns grease.ios.patterns-test
-  "Tests for grease.ios.patterns — delegate proxy pattern.
+  "Tests for grease.ios.patterns — delegate, KVO, and completion-handler patterns.
 
   All tests run on plain JVM with mock bridge.
   [[grease.ios.patterns/create-delegate-class!]] is redefined to avoid
-  native FFI calls (class registration requires the ObjC runtime)."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  native FFI calls (class registration requires the ObjC runtime).
+  Phase 2.2 integration tests exercise the full delegate wiring pipeline."
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [grease.ios.api :as api]
             [grease.ios.foundation]
             [grease.ios.mock-bridge :as mock]
@@ -132,6 +134,87 @@
       (is (= :delegate (:pattern (first (:args m)))))
       (is (= "CLLocationManagerDelegate"
              (:protocol (first (:args m))))))))
+
+;; =============================================================================
+;; CLLocation spec
+;; =============================================================================
+
+(deftest ^:parallel cllocation-spec-loads-test
+  (testing "CLLocation class is in registry after load!"
+    (let [cs (registry/class-spec "CLLocation")]
+      (is (some? cs))
+      (is (= "CLLocation" (:name cs))))))
+
+(deftest ^:parallel cllocation-horizontal-accuracy-test
+  (testing "CLLocation horizontalAccuracy method-spec returns Double"
+    (let [m (registry/method-spec "CLLocation" "horizontalAccuracy")]
+      (is (some? m))
+      (is (= "Double" (:return m)))
+      (is (= "d@:" (:encoding m))))))
+
+(deftest ^:parallel cllocation-coordinate-unsupported-test
+  (testing "CLLocation coordinate is marked :unsupported"
+    (let [m (registry/method-spec "CLLocation" "coordinate")]
+      (is (some? m))
+      (is (true? (:unsupported m))))))
+
+;; =============================================================================
+;; Phase 2.2 — full delegate wiring integration (JVM mock)
+;; =============================================================================
+
+(deftest phase22-full-pipeline-keyword-dispatch-test
+  (testing "api/call with keyword selector dispatches to setDelegate:"
+    (let [mock-inst {:address 0xF00D}]
+      (with-redefs [patterns/create-delegate-class! (fn [_ _ _] mock-inst)]
+        (mock/with-responses {"setDelegate:" nil
+                              "startUpdatingLocation" nil
+                              "requestWhenInUseAuthorization" nil}
+          (let [mgr (api/wrap "CLLocationManager" {:address 0x1234})
+                dm  {:location-manager-did-update-locations (fn [& _] nil)}]
+            ;; keyword-based dispatch for void methods
+            (api/call mgr :start-updating-location)
+            (api/call mgr :request-when-in-use-authorization)
+            ;; setDelegate: via string with delegate pattern
+            (api/call mgr "setDelegate:" dm)
+            (let [calls (mock/calls)]
+              (is (= 3 (count calls)))
+              (is (= "startUpdatingLocation"          (:sel (nth calls 0))))
+              (is (= "requestWhenInUseAuthorization"  (:sel (nth calls 1))))
+              (is (= "setDelegate:"                   (:sel (nth calls 2))))
+              ;; delegate arg is wrapped via wrap-delegate → objc-new → {:instance-of ...}
+              (is (= {:instance-of mock-inst}
+                     (second (:args (nth calls 2))))))))))))
+
+(deftest phase22-make-location-manager-test
+  (testing "api/make CLLocationManager via init selector returns ObjcObject"
+    (mock/with-responses {"init" {:address 0xBEEF}}
+      (let [mgr (api/make "CLLocationManager" "init")]
+        (is (api/objc-object? mgr))
+        (is (= "CLLocationManager" (:class-name mgr)))
+        ;; init dispatched via class method
+        (is (= 1 (count (mock/calls))))
+        (is (= "init" (:sel (first (mock/calls)))))))))
+
+(deftest phase22-delegate-protocol-selector-resolution-test
+  (testing "wrap-delegate resolves all three CLLocationManagerDelegate selectors"
+    (let [captured (atom nil)]
+      (with-redefs [patterns/create-delegate-class!
+                    (fn [class-name _ sel-enc-fns]
+                      (reset! captured {:class-name class-name
+                                        :sels (mapv first sel-enc-fns)})
+                      {:mocked true})]
+        (mock/with-mock
+          (patterns/wrap-delegate
+           {:location-manager-did-update-locations   (fn [& _] nil)
+            :location-manager-did-fail-with-error    (fn [& _] nil)
+            :location-manager-did-change-authorization (fn [& _] nil)}
+           "CLLocationManagerDelegate")
+          (let [{:keys [class-name sels]} @captured]
+            (is (str/starts-with? class-name "GrseDelegate"))
+            (is (= 3 (count sels)))
+            (is (some #{"locationManager:didUpdateLocations:"} (set sels)))
+            (is (some #{"locationManager:didFailWithError:"} (set sels)))
+            (is (some #{"locationManagerDidChangeAuthorization:"} (set sels)))))))))
 
 ;; =============================================================================
 ;; KVO — init!, kvo-watch!, kvo-unwatch!
