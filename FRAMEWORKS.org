@@ -10,7 +10,7 @@
 | CoreGraphics            | Graphics & Rendering       | https://developer.apple.com/documentation/coregraphics            | SCRAPED  |
 | CoreText                | Graphics & Rendering       | https://developer.apple.com/documentation/coretext                | SCRAPED  |
 | CoreAnimation           | Graphics & Rendering       | https://developer.apple.com/documentation/coreanimation           |          |
-| QuartzCore              | Graphics & Rendering       | https://developer.apple.com/documentation/quartzcore              |          |
+| QuartzCore              | Graphics & Rendering       | https://developer.apple.com/documentation/quartzcore              | SCRAPED  |
 | ImageIO                 | Graphics & Rendering       | https://developer.apple.com/documentation/imageio                 | SCRAPED  |
 | Metal                   | Graphics & Rendering       | https://developer.apple.com/documentation/metal                   | SCRAPED  |
 | MetalKit                | Graphics & Rendering       | https://developer.apple.com/documentation/metalkit                | SCRAPED  |
@@ -24,8 +24,8 @@
 | SwiftUI                 | UI & App Structure         | https://developer.apple.com/documentation/swiftui                 | SCRAPED  |
 | CarPlay                 | UI & App Structure         | https://developer.apple.com/documentation/carplay                 | SCRAPED  |
 | CoreData                | Data & Persistence         | https://developer.apple.com/documentation/coredata                | SCRAPED  |
-| CloudKit                | Data & Persistence         | https://developer.apple.com/documentation/cloudkit                |          |
-| SwiftData               | Data & Persistence         | https://developer.apple.com/documentation/swiftdata               |          |
+| CloudKit                | Data & Persistence         | https://developer.apple.com/documentation/cloudkit                | SCRAPED  |
+| SwiftData               | Data & Persistence         | https://developer.apple.com/documentation/swiftdata               | SCRAPED  |
 | Foundation              | Data & Persistence         | https://developer.apple.com/documentation/foundation              | YES      |
 | CoreLocation            | Location & Maps            | https://developer.apple.com/documentation/corelocation            | YES      |
 | MapKit                  | Location & Maps            | https://developer.apple.com/documentation/mapkit                  | SCRAPED  |
@@ -47,18 +47,17 @@
 | Speech                  | Machine Learning & AI      | https://developer.apple.com/documentation/speech                  | SCRAPED  |
 | SoundAnalysis           | Machine Learning & AI      | https://developer.apple.com/documentation/soundanalysis           | SCRAPED  |
 | Security                | Security & Privacy         | https://developer.apple.com/documentation/security                | SCRAPED  |
-| CryptoKit               | Security & Privacy         | https://developer.apple.com/documentation/cryptokit               |          |
+| CryptoKit               | Security & Privacy         | https://developer.apple.com/documentation/cryptokit               | SCRAPED  |
 | LocalAuthentication     | Security & Privacy         | https://developer.apple.com/documentation/localauthentication     | SCRAPED  |
 | SafariServices          | Security & Privacy         | https://developer.apple.com/documentation/safariservices          | SCRAPED  |
 | AppTrackingTransparency | Security & Privacy         | https://developer.apple.com/documentation/apptrackingtransparency | SCRAPED  |
 | DeviceCheck             | Security & Privacy         | https://developer.apple.com/documentation/devicecheck             | SCRAPED  |
-| Combine                 | Swift & Concurrency        | https://developer.apple.com/documentation/combine                 |          |
+| Combine                 | Swift & Concurrency        | https://developer.apple.com/documentation/combine                 | SCRAPED  |
 | Swift                   | Swift & Concurrency        | https://developer.apple.com/documentation/swift                   | SCRAPED  |
 | Dispatch                | Swift & Concurrency        | https://developer.apple.com/documentation/dispatch                | SCRAPED  |
 | os                      | Swift & Concurrency        | https://developer.apple.com/documentation/os                      | SCRAPED  |
 | XPC                     | System & Low-Level         | https://developer.apple.com/documentation/xpc                     | SCRAPED  |
 | SystemConfiguration     | System & Low-Level         | https://developer.apple.com/documentation/systemconfiguration     | SCRAPED  |
-| Darwin                  | System & Low-Level         | https://developer.apple.com/documentation/darwin                  |          |
 | Accessibility           | Accessibility              | https://developer.apple.com/documentation/accessibility           | SCRAPED  |
 | AppIntents              | Extensions & Notifications | https://developer.apple.com/documentation/appintents              | SCRAPED  |
 | Intents                 | Extensions & Notifications | https://developer.apple.com/documentation/intents                 | SCRAPED  |
