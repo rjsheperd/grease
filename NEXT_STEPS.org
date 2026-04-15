@@ -377,7 +377,7 @@ Requires ~NFCReaderUsageDescription~ in Info.plist and NFC entitlement.
     (ffi/call "grease_call_void_block" :void :pointer handler)))
 #+end_src
 
-* Phase 7 — Protocol Conformance [1/2] :IN-PROGRESS:
+* Phase 7 — Protocol Conformance [2/2] :DONE:
 
 ~add-protocol!~ and ~conforms-to-protocol?~ proven on-device. BT delegate
 now explicitly conforms to ~CBCentralManagerDelegate~.
@@ -398,17 +398,20 @@ Added to ~src/grease/ios/objc.clj~ (also added ~tech.v3.datatype.ffi~ require):
 ;; => true
 #+end_src
 
-** TODO 7.2 Verify required selectors at registration time
+** DONE 7.2 Verify required selectors at registration time
+
+Added ~class-responds-to?~ and ~check-conformance!~ to ~grease.ios.objc~.
+Key insight: ~respond-to?~ (from ~grease.ios.repl~) checks metaclass methods
+when passed a class pointer. Instance-method coverage requires
+~instancesRespondToSelector:~ — exposed as ~class-responds-to?~.
 
 #+begin_src clojure
-;; protocol_copyMethodDescriptionList — returns method descriptor structs.
-;; Needs C shim to iterate (struct pointer arithmetic not possible in Clojure).
-;; Simple version: check respond-to? for known required selectors.
-(defn check-conformance! [cls protocol-name required-sels]
-  (let [missing (remove #(objc-rt/respond-to? cls %) required-sels)]
-    (when (seq missing)
-      (throw (ex-info "Missing required protocol methods"
-                      {:protocol protocol-name :missing missing})))))
+(check-conformance! MyDelegate "CBCentralManagerDelegate"
+                    ["centralManagerDidUpdateState:"])
+;; => nil (all present) or throws ex-info {:missing [...]}
+
+(class-responds-to? GreaseBTDelegate_v1 "centralManagerDidUpdateState:")
+;; => true
 #+end_src
 
 * Phase 8 — Swift Interop

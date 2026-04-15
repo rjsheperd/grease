@@ -194,3 +194,26 @@
       (not= 0 (ffi/call "class_conformsToProtocol" :int8
                         :pointer cls :pointer proto))
       false)))
+
+(defn class-responds-to?
+  "Returns true if instances of cls respond to the selector named by sel-str.
+  Use this (not [[respond-to?]]) when checking instance-method coverage on a
+  class pointer — `respond-to?` checks metaclass methods, not instance methods."
+  [cls sel-str]
+  (let [sel (grease/register-objc-sel sel-str)]
+    (not= 0 (msg-send :int8 cls "instancesRespondToSelector:" :pointer sel))))
+
+(defn check-conformance!
+  "Throws ex-info if cls is missing any of the selectors in required-sels.
+  Use to verify that a [[defclass]] delegate covers all required protocol methods
+  before wiring it up as a delegate.
+
+  Example:
+    (check-conformance! MyLocationDelegate
+                        \"CLLocationManagerDelegate\"
+                        [\"locationManager:didUpdateLocations:\"])"
+  [cls protocol-name required-sels]
+  (let [missing (remove #(class-responds-to? cls %) required-sels)]
+    (when (seq missing)
+      (throw (ex-info "Missing required protocol methods"
+                      {:protocol protocol-name :missing (vec missing)})))))
