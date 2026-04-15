@@ -1,0 +1,94 @@
+* iOS Frameworks Ported
+| Framework               | Category                   | URL                                                               | Ported?  |
+|-------------------------+----------------------------+-------------------------------------------------------------------+----------|
+| AVFoundation            | Media & Audio/Video        | https://developer.apple.com/documentation/avfoundation            | YES      |
+| AVKit                   | Media & Audio/Video        | https://developer.apple.com/documentation/avkit                   | SCRAPED  |
+| MediaPlayer             | Media & Audio/Video        | https://developer.apple.com/documentation/mediaplayer             | SCRAPED  |
+| MusicKit                | Media & Audio/Video        | https://developer.apple.com/documentation/musickit                | SCRAPED  |
+| ShazamKit               | Media & Audio/Video        | https://developer.apple.com/documentation/shazamkit               | SCRAPED  |
+| CoreImage               | Graphics & Rendering       | https://developer.apple.com/documentation/coreimage               | SCRAPED  |
+| CoreGraphics            | Graphics & Rendering       | https://developer.apple.com/documentation/coregraphics            | SCRAPED  |
+| CoreText                | Graphics & Rendering       | https://developer.apple.com/documentation/coretext                | SCRAPED  |
+| CoreAnimation           | Graphics & Rendering       | https://developer.apple.com/documentation/coreanimation           |          |
+| QuartzCore              | Graphics & Rendering       | https://developer.apple.com/documentation/quartzcore              |          |
+| ImageIO                 | Graphics & Rendering       | https://developer.apple.com/documentation/imageio                 | SCRAPED  |
+| Metal                   | Graphics & Rendering       | https://developer.apple.com/documentation/metal                   | SCRAPED  |
+| MetalKit                | Graphics & Rendering       | https://developer.apple.com/documentation/metalkit                | SCRAPED  |
+| MetalPerformanceShaders | Graphics & Rendering       | https://developer.apple.com/documentation/metalperformanceshaders | SCRAPED  |
+| ModelIO                 | Graphics & Rendering       | https://developer.apple.com/documentation/modelio                 | SCRAPED  |
+| SceneKit                | Graphics & Rendering       | https://developer.apple.com/documentation/scenekit                | SCRAPED  |
+| SpriteKit               | Graphics & Rendering       | https://developer.apple.com/documentation/spritekit               | SCRAPED  |
+| RealityKit              | Graphics & Rendering       | https://developer.apple.com/documentation/realitykit              | SCRAPED  |
+| PDFKit                  | Graphics & Rendering       | https://developer.apple.com/documentation/pdfkit                  | SCRAPED  |
+| UIKit                   | UI & App Structure         | https://developer.apple.com/documentation/uikit                   | YES      |
+| SwiftUI                 | UI & App Structure         | https://developer.apple.com/documentation/swiftui                 | SCRAPED  |
+| CarPlay                 | UI & App Structure         | https://developer.apple.com/documentation/carplay                 | SCRAPED  |
+| CoreData                | Data & Persistence         | https://developer.apple.com/documentation/coredata                | SCRAPED  |
+| CloudKit                | Data & Persistence         | https://developer.apple.com/documentation/cloudkit                |          |
+| SwiftData               | Data & Persistence         | https://developer.apple.com/documentation/swiftdata               |          |
+| Foundation              | Data & Persistence         | https://developer.apple.com/documentation/foundation              | YES      |
+| CoreLocation            | Location & Maps            | https://developer.apple.com/documentation/corelocation            | YES      |
+| MapKit                  | Location & Maps            | https://developer.apple.com/documentation/mapkit                  | SCRAPED  |
+| CoreMotion              | Sensors & Hardware         | https://developer.apple.com/documentation/coremotion              | SCRAPED  |
+| CoreHaptics             | Sensors & Hardware         | https://developer.apple.com/documentation/corehaptics             | SCRAPED  |
+| CoreNFC                 | Sensors & Hardware         | https://developer.apple.com/documentation/corenfc                 | SCRAPED  |
+| CoreBluetooth           | Sensors & Hardware         | https://developer.apple.com/documentation/corebluetooth           | YES      |
+| ExternalAccessory       | Sensors & Hardware         | https://developer.apple.com/documentation/externalaccessory       | SCRAPED  |
+| SensorKit               | Sensors & Hardware         | https://developer.apple.com/documentation/sensorkit               | SCRAPED  |
+| Network                 | Networking & Connectivity  | https://developer.apple.com/documentation/network                 | SCRAPED  |
+| NetworkExtension        | Networking & Connectivity  | https://developer.apple.com/documentation/networkextension        | SCRAPED  |
+| MultipeerConnectivity   | Networking & Connectivity  | https://developer.apple.com/documentation/multipeerconnectivity   | SCRAPED  |
+| CFNetwork               | Networking & Connectivity  | https://developer.apple.com/documentation/cfnetwork               | SCRAPED  |
+| WebKit                  | Networking & Connectivity  | https://developer.apple.com/documentation/webkit                  | SCRAPED  |
+| CoreML                  | Machine Learning & AI      | https://developer.apple.com/documentation/coreml                  | SCRAPED  |
+| CreateML                | Machine Learning & AI      | https://developer.apple.com/documentation/createml                | SCRAPED  |
+| NaturalLanguage         | Machine Learning & AI      | https://developer.apple.com/documentation/naturallanguage         | SCRAPED  |
+| Vision                  | Machine Learning & AI      | https://developer.apple.com/documentation/vision                  | SCRAPED  |
+| Speech                  | Machine Learning & AI      | https://developer.apple.com/documentation/speech                  | SCRAPED  |
+| SoundAnalysis           | Machine Learning & AI      | https://developer.apple.com/documentation/soundanalysis           | SCRAPED  |
+| Security                | Security & Privacy         | https://developer.apple.com/documentation/security                | SCRAPED  |
+| CryptoKit               | Security & Privacy         | https://developer.apple.com/documentation/cryptokit               |          |
+| LocalAuthentication     | Security & Privacy         | https://developer.apple.com/documentation/localauthentication     | SCRAPED  |
+| SafariServices          | Security & Privacy         | https://developer.apple.com/documentation/safariservices          | SCRAPED  |
+| AppTrackingTransparency | Security & Privacy         | https://developer.apple.com/documentation/apptrackingtransparency | SCRAPED  |
+| DeviceCheck             | Security & Privacy         | https://developer.apple.com/documentation/devicecheck             | SCRAPED  |
+| Combine                 | Swift & Concurrency        | https://developer.apple.com/documentation/combine                 |          |
+| Swift                   | Swift & Concurrency        | https://developer.apple.com/documentation/swift                   | SCRAPED  |
+| Dispatch                | Swift & Concurrency        | https://developer.apple.com/documentation/dispatch                | SCRAPED  |
+| os                      | Swift & Concurrency        | https://developer.apple.com/documentation/os                      | SCRAPED  |
+| XPC                     | System & Low-Level         | https://developer.apple.com/documentation/xpc                     | SCRAPED  |
+| SystemConfiguration     | System & Low-Level         | https://developer.apple.com/documentation/systemconfiguration     | SCRAPED  |
+| Darwin                  | System & Low-Level         | https://developer.apple.com/documentation/darwin                  |          |
+| Accessibility           | Accessibility              | https://developer.apple.com/documentation/accessibility           | SCRAPED  |
+| AppIntents              | Extensions & Notifications | https://developer.apple.com/documentation/appintents              | SCRAPED  |
+| Intents                 | Extensions & Notifications | https://developer.apple.com/documentation/intents                 | SCRAPED  |
+| IntentsUI               | Extensions & Notifications | https://developer.apple.com/documentation/intentsui               | SCRAPED  |
+| WidgetKit               | Extensions & Notifications | https://developer.apple.com/documentation/widgetkit               | SCRAPED  |
+| UserNotifications       | Extensions & Notifications | https://developer.apple.com/documentation/usernotifications       | SCRAPED  |
+| PushKit                 | Extensions & Notifications | https://developer.apple.com/documentation/pushkit                 | SCRAPED  |
+| BackgroundTasks         | Extensions & Notifications | https://developer.apple.com/documentation/backgroundtasks         | SCRAPED  |
+| StoreKit                | Payments & Commerce        | https://developer.apple.com/documentation/storekit                | SCRAPED  |
+| PassKit                 | Payments & Commerce        | https://developer.apple.com/documentation/passkit                 | SCRAPED  |
+| ARKit                   | AR / XR                    | https://developer.apple.com/documentation/arkit                   | SCRAPED  |
+| HealthKit               | Health & Fitness           | https://developer.apple.com/documentation/healthkit               | SCRAPED  |
+| Contacts                | Contacts & Calendar        | https://developer.apple.com/documentation/contacts                | SCRAPED  |
+| ContactsUI              | Contacts & Calendar        | https://developer.apple.com/documentation/contactsui              | SCRAPED  |
+| EventKit                | Contacts & Calendar        | https://developer.apple.com/documentation/eventkit                | SCRAPED  |
+| EventKitUI              | Contacts & Calendar        | https://developer.apple.com/documentation/eventkitui              | SCRAPED  |
+| Photos                  | Photos & Camera            | https://developer.apple.com/documentation/photos                  | SCRAPED  |
+| PhotosUI                | Photos & Camera            | https://developer.apple.com/documentation/photosui                | SCRAPED  |
+| GameKit                 | Gaming & Input             | https://developer.apple.com/documentation/gamekit                 | SCRAPED  |
+| GameController          | Gaming & Input             | https://developer.apple.com/documentation/gamecontroller          | SCRAPED  |
+| GameplayKit             | Gaming & Input             | https://developer.apple.com/documentation/gameplaykit             | SCRAPED  |
+| ReplayKit               | Gaming & Input             | https://developer.apple.com/documentation/replaykit               | SCRAPED  |
+| XCTest                  | Developer & Diagnostics    | https://developer.apple.com/documentation/xctest                  | SCRAPED  |
+| MetricKit               | Developer & Diagnostics    | https://developer.apple.com/documentation/metrickit               | SCRAPED  |
+| OSLog                   | Developer & Diagnostics    | https://developer.apple.com/documentation/oslog                   | SCRAPED  |
+| MessageUI               | Miscellaneous              | https://developer.apple.com/documentation/messageui               | SCRAPED  |
+| QuickLook               | Miscellaneous              | https://developer.apple.com/documentation/quicklook               | SCRAPED  |
+| FileProvider            | Miscellaneous              | https://developer.apple.com/documentation/fileprovider            | SCRAPED  |
+| CoreSpotlight           | Miscellaneous              | https://developer.apple.com/documentation/corespotlight           | SCRAPED  |
+| CoreTelephony           | Miscellaneous              | https://developer.apple.com/documentation/coretelephony           | SCRAPED  |
+| CallKit                 | Miscellaneous              | https://developer.apple.com/documentation/callkit                 | SCRAPED  |
+| ClassKit                | Miscellaneous              | https://developer.apple.com/documentation/classkit                | SCRAPED  |
+| AdServices              | Miscellaneous              | https://developer.apple.com/documentation/adservices              | SCRAPED  |
