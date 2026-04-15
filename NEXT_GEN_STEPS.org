@@ -412,45 +412,52 @@ Public API: build-encoding, normalize-method-ref, normalize-class-doc, framework
 ObjC type mapping table (objc->grease) covers 20 common types + id fallback.
 Known limitation: protocol-typed args (id<Protocol>) may default to "id" type.
 
-** IN-PROGRESS 6.3 Scrape the framework list
+** DONE 6.3 Scrape the framework list
 
 CLI runner: ~clj -M -m grease.scrape.run CoreLocation AVFoundation~
 Writes EDN to ~resources/grease/api-specs/<Framework>.edn~; updates manifest.
 Requires network (fetches from Apple docs API). Cached to ~.cache/apple-docs/~.
 8 runner tests, 15 assertions — no network required for CI.
 
-| Framework | Key Classes | Notes |
-|-----------+--------------+-------|
-| Foundation | NSString, NSArray, NSDictionary | Start here |
-| UIKit | UIView, UIViewController, UILabel | Struct-heavy; partial |
-| AVFoundation | AVPlayer, AVCaptureSession | Camera + audio |
-| CoreLocation | CLLocationManager, CLLocation | GPS |
-| CoreBluetooth | CBCentralManager | BLE |
-| CoreData | NSManagedObjectContext | ORM |
-| MapKit | MKMapView, MKAnnotation | |
-| StoreKit | SKProduct, SKPaymentQueue | IAP |
-| UserNotifications | UNUserNotificationCenter | Push |
-| AuthenticationServices | ASWebAuthenticationSession | OAuth |
-| ARKit | ARSession, ARFrame | AR |
-| SensorKit | SRSensorReader | Biometrics |
-| CoreNFC | NFCNDEFReaderSession | NFC (entitlement) |
-| HealthKit | HKHealthStore | Entitlement |
-| HomeKit | HMHomeManager | Entitlement |
-| GameKit | GKLocalPlayer | Game Center |
-| EventKit | EKEventStore | Calendar |
-| Contacts | CNContactStore | Contacts |
-| Photos | PHPhotoLibrary | Photo access |
-| SafariServices | SFSafariViewController | In-app browser |
-| WebKit | WKWebView | Web content |
-| MessageUI | MFMailComposeViewController | Email (entitlement) |
-| CoreMotion | CMMotionManager | Gyro/accel |
-| CoreHaptics | CHHapticEngine | Haptic feedback |
-| CoreImage | CIFilter, CIContext | Image processing |
-| Vision | VNRequest | ML vision |
-| NaturalLanguage | NLTokenizer | NLP |
-| CreateML | N/A | On-device training |
+| Framework              | Key Classes                       | Notes                 |
+|------------------------+-----------------------------------+-----------------------|
+| Foundation             | NSString, NSArray, NSDictionary   | Start here            |
+| UIKit                  | UIView, UIViewController, UILabel | Struct-heavy; partial |
+| AVFoundation           | AVPlayer, AVCaptureSession        | Camera + audio        |
+| CoreLocation           | CLLocationManager, CLLocation     | GPS                   |
+| CoreBluetooth          | CBCentralManager                  | BLE                   |
+| CoreData               | NSManagedObjectContext            | ORM                   |
+| MapKit                 | MKMapView, MKAnnotation           |                       |
+| StoreKit               | SKProduct, SKPaymentQueue         | IAP                   |
+| UserNotifications      | UNUserNotificationCenter          | Push                  |
+| AuthenticationServices | ASWebAuthenticationSession        | OAuth                 |
+| ARKit                  | ARSession, ARFrame                | AR                    |
+| SensorKit              | SRSensorReader                    | Biometrics            |
+| CoreNFC                | NFCNDEFReaderSession              | NFC (entitlement)     |
+| HealthKit              | HKHealthStore                     | Entitlement           |
+| HomeKit                | HMHomeManager                     | Entitlement           |
+| GameKit                | GKLocalPlayer                     | Game Center           |
+| EventKit               | EKEventStore                      | Calendar              |
+| Contacts               | CNContactStore                    | Contacts              |
+| Photos                 | PHPhotoLibrary                    | Photo access          |
+| SafariServices         | SFSafariViewController            | In-app browser        |
+| WebKit                 | WKWebView                         | Web content           |
+| MessageUI              | MFMailComposeViewController       | Email (entitlement)   |
+| CoreMotion             | CMMotionManager                   | Gyro/accel            |
+| CoreHaptics            | CHHapticEngine                    | Haptic feedback       |
+| CoreImage              | CIFilter, CIContext               | Image processing      |
+| Vision                 | VNRequest                         | ML vision             |
+| NaturalLanguage        | NLTokenizer                       | NLP                   |
+| CreateML               | N/A                               | On-device training    |
 
 Gate per framework: EDN loads without validation errors; oracle test passes.
+
+Results: 75 frameworks scraped via ~clj -M -m grease.scrape.run~ in batches.
+5 remain hand-written (Foundation, CoreLocation, AVFoundation, UIKit, CoreBluetooth).
+4 failed at network level: CoreAnimation (404), Darwin (404), CryptoKit/Combine (502).
+All 96,084 oracle assertions pass across the full 80-spec manifest.
+Manifest updated at ~resources/grease/api-specs/manifest.edn~.
+FRAMEWORKS.org updated with SCRAPED/YES/blank status.
 
 * Phase 7 — Round-trip test suite (Step 13)
 
@@ -476,6 +483,185 @@ all-enum-values-have-clj-name, all-enums-kw->raw, all-enums-raw->kw,
 all-protocols-accessible, all-protocol-methods-have-selectors,
 all-classes-in-registry, all-classes-have-required-keys,
 all-methods-findable-by-selector, all-protocols-name-matches.
+
+* Phase 8 — Auto-coercion Layer (objcjure-inspired)
+
+Source insight: ~objcjure/src/com/phronemophobic/objcjure.clj~ implements ~arg->dtype~
+(runtime Clojure-type → FFI-type inference) and a ~@~ deref coercion macro that
+auto-converts strings → NSString, vectors → NSArray, maps → NSDictionary, numbers →
+NSNumber.  The grease engine currently requires callers to pre-box values manually.
+This phase adds the same convenience without changing the encoding-driven wire layer.
+
+** TODO 8.1 ~grease.ios.coerce~ — Clojure→ObjC value bridge
+
+New namespace sitting between the user and ~grease.ios.types~.
+
+#+begin_src clojure
+;; grease/ios/coerce.clj — public API
+(defn ->ns-object [v])
+;; Dispatch on Clojure type:
+;;   String     -> NSString via stringWithUTF8String:
+;;   IPersistentVector -> NSArray via NSMutableArray + addObject:
+;;   IPersistentMap    -> NSDictionary via NSMutableDictionary + setObject:forKey:
+;;   IPersistentSet    -> NSSet via NSMutableSet + addObject:
+;;   Long/Integer -> NSNumber via numberWithLongLong:
+;;   Double/Float -> NSNumber via numberWithDouble:
+;;   nil          -> null-ptr (passthrough)
+;;   other        -> passthrough (assume already a pointer)
+
+(defn from-ns-object [class-name ptr])
+;; Reverse:
+;;   "NSString"  -> (.UTF8String ptr) -> Clojure string
+;;   "NSArray"   -> walk count+objectAtIndex: -> Clojure vector
+;;   "NSDictionary" -> walk allKeys+objectForKey: -> Clojure map
+;;   "NSNumber"  -> longLongValue or doubleValue
+;;   other       -> ptr passthrough
+#+end_src
+
+~->ns-object~ is modeled on objcjure's ~arg->dtype~ + deref coercion handlers
+(~objcjure.clj~ lines 111–126 and 345–436).
+
+Gate: ~test/grease/ios/coerce_test.clj~
+- Round-trip each Clojure type: ~(from-ns-object t (->ns-object v)) => v~
+- nil passthrough; unknown pointer passthrough
+- All tests run JVM-only via mock bridge (no device needed)
+
+** TODO 8.2 Wire auto-coercion into ~grease.ios.invoke/dispatch!~
+
+Extend ~invoke/dispatch!~ so that when a method arg has ~:type "id"~ and the caller
+passes a Clojure value (not a pointer), ~coerce/->ns-object~ is applied automatically.
+
+#+begin_src clojure
+;; In invoke/dispatch! arg-coercion step (currently line 81-84):
+(let [coerced (cond
+                (:pattern spec) (patterns/wrap-arg spec val)
+                ;; NEW: auto-box plain Clojure values for id-typed args
+                (and (= "id" (:type spec "id"))
+                     (not (pointer? val)))
+                (coerce/->ns-object val)
+                :else
+                (types/coerce-in (:type spec "id") val))]
+  ...)
+#+end_src
+
+Before: ~(ios/call label :set-text (f/->nsstring "hello"))~
+After:  ~(ios/call label :set-text "hello")~
+
+Gate: existing invoke tests unchanged; new test verifies string arg auto-boxed.
+
+* Phase 9 — Generic Block Factory (objcjure-inspired)
+
+Source insight: ~objcjure.clj~ lines 174–198 implement a single ~make-block~ that
+accepts any ~[ret-type [arg-types...]]~ and builds a conformant Apple Block ABI struct.
+The current ~grease.ios.blocks~ has three hard-coded shapes (~make-void-block~,
+~make-data-block~, ~make-bool-error-block~).  Any async API with a different signature
+(URLSession upload, CoreBluetooth characteristic reads, HealthKit queries, etc.) needs
+a new C shim today.
+
+** TODO 9.1 ~grease.ios.blocks/make-typed-block~ — arbitrary-signature blocks
+
+Extend ~grease.ios.blocks~ with a generic factory that takes a return keyword and
+a vector of arg-type keywords (matching the ~encoding-char->kw~ table in
+~grease.ios.invoke~):
+
+#+begin_src clojure
+(defn make-typed-block
+  "Returns an ObjC heap block with the given signature.
+  ret-kw   — one of :void :pointer :int8 :int32 :int64 :float32 :float64
+  arg-kws  — vector of the same keywords, one per block parameter.
+  f        — Clojure fn receiving one raw arg per entry in arg-kws.
+
+  Examples:
+    ;; void (^)(void)
+    (make-typed-block :void [] #(println \"done\"))
+
+    ;; void (^)(NSData*, NSURLResponse*, NSError*)
+    (make-typed-block :void [:pointer :pointer :pointer]
+                      (fn [data resp err] ...))
+
+    ;; void (^)(BOOL, NSError*)
+    (make-typed-block :void [:int8 :pointer]
+                      (fn [ok err] ...))"
+  [ret-kw arg-kws f]
+  ...)
+#+end_src
+
+Implementation: use ~grease_make_typed_block~ C shim (to be added to
+~xcode/MobileTest/grease_blocks.m~) that accepts a closure pointer, an encoding
+string, and returns a ~Block_copy~'d heap block.  Model on objcjure's
+~make-block~ (lines 174–198) and the existing ~make-data-block~ shim.
+
+Gate: JVM test via mock-bridge — ~call-void-block!~ on a typed block invokes fn.
+
+** TODO 9.2 Wire typed blocks into ~:completion-handler~ pattern
+
+The ~:completion-handler~ pattern in ~grease.ios.patterns~ currently creates a block
+only in mock tests (via ~mock-bridge/invoke-block!~).  Wire in ~make-typed-block~ so
+the engine creates a real block on device.
+
+Determine the block signature from the method spec encoding: chars after position 3
+that correspond to the completion-handler arg become the block's arg types.
+
+#+begin_src clojure
+;; CoreData async save example — from the engine after this phase:
+(let [p (ios/call ctx :perform-block-and-wait)]
+  @p)  ; => {:saved true}
+
+;; HealthKit auth — currently requires manual make-bool-error-block
+(let [p (ios/call store :request-authorization-to-share:read:completion:
+                  share-types read-types)]
+  @p)  ; => {:granted true}
+#+end_src
+
+Gate: existing patterns tests pass; new test exercises typed block round-trip.
+
+* Phase 10 — Struct Support via Header Parsing (objcjure-inspired)
+
+Source insight: objcjure uses ~com.phronemophobic/clong~ to parse C headers
+(~objcjure/headers/objc.h~) and generates ~api.edn~ with exact struct field layouts.
+The grease engine marks all struct-arg/return methods ~:unsupported true~ (v1 deferral).
+This phase unlocks CGRect, CGPoint, CGSize, CMTime, CLLocationCoordinate2D, etc.
+
+** TODO 10.1 Parse iOS SDK headers with ~clong~
+
+Add ~clong~ dev dependency.  Write ~dev/gen_structs.clj~ that:
+1. Runs ~clong/easy-api~ on relevant headers from the Xcode SDK:
+   ~CoreGraphics/CGGeometry.h~, ~CoreMedia/CMTime.h~, ~CoreLocation/CLLocation.h~
+2. Extracts struct field layouts (name, offset, type, size)
+3. Writes ~resources/grease/structs.edn~
+
+#+begin_src clojure
+;; Example output entry in structs.edn
+{:name "CGRect"
+ :fields [{:name "origin" :type "CGPoint" :offset 0}
+           {:name "size"   :type "CGSize"  :offset 16}]
+ :size 32}
+#+end_src
+
+Gate: ~structs.edn~ exists; all field types resolve to primitive encodings or
+known struct names.
+
+** TODO 10.2 Struct coercion in ~grease.ios.types~
+
+Extend ~types/coerce-in~ and ~types/coerce-out~ to handle struct types:
+- ~coerce-in~: Clojure map ~{:x 0 :y 0 :width 100 :height 50}~ → packed byte buffer
+  (via ~dtype-next/struct-datatype~ or manual ~ByteBuffer~)
+- ~coerce-out~: raw pointer / value-return → Clojure map with named fields
+- Expose a ~(types/struct-for [type-name])~ lookup
+
+Update ~grease.ios.invoke/dispatch!~ to detect struct return types (currently
+classified as ~:pointer~) and apply ~coerce-out~ accordingly.
+
+Gate: ~(ios/call label :frame)~ returns ~{:x 0.0 :y 100.0 :width 375.0 :height 44.0}~
+instead of an opaque pointer.
+
+** TODO 10.3 Remove ~:unsupported true~ gates from scraped EDN
+
+Re-run ~grease.scrape.normalize~ with struct types now resolvable.
+Methods previously tagged ~:unsupported true~ due to CGRect/CGPoint/etc.
+args get proper encoding and become callable.
+
+Oracle check: before/after counts of ~:unsupported true~ methods per framework.
 
 * Open Questions (from §9 of NEXT_GEN_ARCH.md)
 
@@ -520,11 +706,24 @@ Phase 6 (Scraper):
 Phase 7 (Round-trip suite):
   7.1 oracle_test.clj
 
+Phase 8 (Auto-coercion — objcjure-inspired, JVM-only):
+  8.1 grease.ios.coerce → 8.2 wire into invoke/dispatch!
+  Unblocks: passing plain Clojure strings/vectors/maps to any id-typed method.
+
+Phase 9 (Generic block factory — objcjure-inspired):
+  9.1 make-typed-block + C shim → 9.2 wire into :completion-handler pattern
+  Unblocks: any async iOS API with a completion block of arbitrary signature.
+
+Phase 10 (Struct support — objcjure clong-inspired):
+  10.1 parse SDK headers → 10.2 struct coerce-in/out → 10.3 re-scrape without :unsupported
+  Unblocks: CGRect, CMTime, CLLocationCoordinate2D — currently all tagged :unsupported true.
+  Dependency: 10.1 requires macOS with Xcode SDK installed.
+
 OFF THE CRITICAL PATH:
-- Phase 9.1 (sci/new-macro-var): blocked by circular dependency
+- NEXT_STEPS.org 9.1 (sci/new-macro-var): blocked by circular dependency
   (grease.ios.objc requires grease; can't require it back). Deferred.
-- Phase 9.3 (incremental GraalVM): not stable for iOS targets. Track only.
-- Phase 9.4 (automated tests): subsumed by NEXT_GEN oracle tests in Step 5.
+- NEXT_STEPS.org 9.3 (incremental GraalVM): not stable for iOS targets. Track only.
+- NEXT_STEPS.org 9.4 (automated tests): subsumed by NEXT_GEN oracle tests in Step 5.
   Building a standalone harness before the engine exists is redundant.
 
 Each gate must pass before advancing.

@@ -7,3 +7,6 @@
 [submodule "third_party/babashka"]
 	path = third_party/babashka
 	url = https://github.com/babashka/babashka.git
+[submodule "objcjure"]
+	path = objcjure
+	url = https://github.com/phronmophobic/objcjure
