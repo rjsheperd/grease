@@ -64,7 +64,7 @@ Key behaviors:
 Gate: ~test/grease/ios/types_test.clj~ — every entry round-trips;
 all coercer symbols resolve; ~(types/encoding-for "NSString")~ → ~"@"~.
 
-** TODO 0.3 Naming rules — ~resources/grease/naming.edn~ + ~grease.ios.naming~
+** DONE 0.3 Naming rules — ~resources/grease/naming.edn~ + ~grease.ios.naming~
 
 Create ~resources/grease/naming.edn~ with rules from §3.2.
 Tests auto-derived from ~:examples~ — every example pair becomes an

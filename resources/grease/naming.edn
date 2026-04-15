@@ -1,0 +1,70 @@
+;; Naming rules — transform ObjC names → Clojure names and vice versa.
+;;
+;; Rules are applied in order; the first matching rule wins.
+;; :scope    — :method :setter :class :enum-val
+;; :match    — regex pattern string (matched against the ObjC name)
+;; :transform — keyword naming a defmethod in grease.ios.naming
+;; :examples — mandatory map of ObjC-name -> expected Clojure output (doubles as test data)
+;;
+;; Selectors with colons are flattened before matching:
+;;   "setObject:forKey:" -> "setObject-forKey-" -> apply camel->kebab -> "set-object-for-key"
+;;
+;; The reverse index (Clojure name -> ObjC selector) is stored in the spec
+;; alongside each class/method at transform-spec time.
+
+{:rules
+ [{:scope :method
+   :match "^is(.+)$"
+   :transform :strip+question
+   :examples {"isPlaying" "playing?"
+              "isHidden"  "hidden?"
+              "isRunning" "running?"
+              "isEmpty"   "empty?"}}
+
+  {:scope :method
+   :match "^has(.+)$"
+   :transform :strip+question
+   :examples {"hasPrefix"  "prefix?"
+              "hasSuffix"  "suffix?"
+              "hasChanges" "changes?"}}
+
+  {:scope :setter
+   :transform :wrap-set-bang
+   :examples {"volume"      "set-volume!"
+              "text"        "set-text!"
+              "delegate"    "set-delegate!"
+              "hidden"      "set-hidden!"}}
+
+  {:scope :method
+   :transform :camel->kebab
+   :examples {"startRunning"                  "start-running"
+              "stopRunning"                   "stop-running"
+              "startUpdatingLocation"         "start-updating-location"
+              "requestWhenInUseAuthorization" "request-when-in-use-authorization"
+              "stringByAppendingString:"      "string-by-appending-string"
+              "setObject:forKey:"             "set-object-for-key"
+              "objectAtIndex:"                "object-at-index"
+              "addObject:"                    "add-object"
+              "setValue:forKey:"              "set-value-for-key"
+              "initWithDelegate:queue:"       "init-with-delegate-queue"}}
+
+  {:scope :enum-val
+   :transform :camel->kebab-keyword
+   :examples {"readyToPlay"   :ready-to-play
+              "unknown"       :unknown
+              "poweredOn"     :powered-on
+              "poweredOff"    :powered-off
+              "unauthorized"  :unauthorized
+              "notDetermined" :not-determined
+              "authorized"    :authorized}}
+
+  {:scope :class
+   :transform :strip-framework-prefix
+   :examples {"AVPlayer"         "player"
+              "NSURL"            "url"
+              "NSString"         "string"
+              "CBCentralManager" "central-manager"
+              "CLLocationManager" "location-manager"
+              "UILabel"          "label"
+              "UIView"           "view"
+              "UIApplication"    "application"}}]}
