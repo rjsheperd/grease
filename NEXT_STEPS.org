@@ -414,36 +414,54 @@ when passed a class pointer. Instance-method coverage requires
 ;; => true
 #+end_src
 
-* Phase 8 — Swift Interop
+* Phase 8 — Swift Interop [2/3]
 
 Swift classes marked ~@objc~ (or inheriting from ~NSObject~) are visible in
 the ObjC runtime. The same ~defclass~ / ~msg-send~ patterns apply directly.
 
-** TODO 8.1 Document ~@objc~ bridge pattern
+** DONE 8.1 Document ~@objc~ bridge pattern
 
-Any Swift class in the Xcode project marked ~@objc class MyService: NSObject~
-is accessible via:
+Written as ~examples/swift/swift_bridge.clj~. Key findings:
+
+- Swift classes register as ~ModuleName.ClassName~ (e.g. ~MobileTest.AppDelegate~)
+- Use ~@objc(ClassName)~ annotation to override to a bare name accessible as
+  ~(get-class "ClassName")~ instead of ~(get-class "MobileTest.ClassName")~
+- ~@objc var message: String~ synthesises both ~"message"~ getter and
+  ~"setMessage:"~ setter — do NOT also define ~func setMessage~, that conflicts
+- Static properties (~@objc static let shared~) are class methods on the
+  metaclass, callable via ~(msg-send :pointer cls "shared")~
+
 #+begin_src clojure
-(get-class "MyService")
-(msg-send :pointer (get-class "MyService") "sharedInstance")
-(msg-send :void my-service "processData:" :pointer (->nsstring data))
+;; Access a Swift singleton from Clojure:
+(def hook (grease.ios.objc/msg-send :pointer (get-class "GreaseHook") "shared"))
+
+;; Read an @objc property:
+(f/nsstring->str (grease.ios.objc/msg-send :pointer hook "message"))
+;; => "No message yet"
+
+;; Write an @objc property (via synthesized setter):
+(grease.ios.objc/msg-send :void hook "setMessage:" :pointer (f/->nsstring "Hello!"))
 #+end_src
 
-Write ~examples/swift/swift_bridge.clj~ demonstrating the pattern.
+** DONE 8.2 SwiftUI display card driven by Clojure via GreaseHook
 
-** TODO 8.2 SwiftUI via ~UIHostingController~
-
-SwiftUI uses value types — not directly callable from ObjC runtime.
-Pattern: write a ~UIHostingController~ subclass in Swift that exposes
-~@objc~ configuration hooks. Drive from Clojure via ~msg-send~.
-
+Added ~xcode/MobileTest/MobileTest/GreaseHook.swift~:
 #+begin_src swift
-// In Swift
-@objc class GreaseHostingController: UIHostingController<AnyView> {
-    @objc func setBodyText(_ text: String) {
-        // update SwiftUI state from Clojure msg-send
-    }
+@objc(GreaseHook) class GreaseHook: NSObject {
+    @objc static let shared = GreaseHook()
+    @objc var message: String = "No message yet"
 }
+#+end_src
+
+ContentView polls ~GreaseHook.shared.message~ every 0.5 s and shows it in a
+cyan REPL status card. Writing ~"Hello from Clojure REPL!"~ from the nREPL
+instantly appears on the device screen.
+
+Methods visible in ObjC runtime: ~message~, ~setMessage:~, ~init~.
+
+Confirmed round-trip:
+#+begin_src clojure
+{:before "No message yet", :after "Hello from Clojure REPL!"}
 #+end_src
 
 ** TODO 8.3 Swift actors and async/await bridge

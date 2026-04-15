@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var hashValue: String = "..."
     @State private var nreplPort: Int = 0
     @State private var logLines: [String] = []
+    @State private var greaseMessage: String = GreaseHook.shared.message
 
     private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
@@ -48,6 +49,16 @@ struct ContentView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(.orange)
                     }
+                }
+
+                HStack(spacing: 6) {
+                    Text("REPL")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(greaseMessage)
+                        .font(.system(.body, design: .monospaced))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.cyan)
                 }
             }
             .padding()
@@ -112,6 +123,9 @@ struct ContentView: View {
     private func poll() {
         let port = Int(call_nrepl_port())
         if port != nreplPort { nreplPort = port }
+
+        let msg = GreaseHook.shared.message
+        if msg != greaseMessage { greaseMessage = msg }
 
         guard let ptr = bridge_get_logs() else { return }
         let raw = String(cString: ptr)

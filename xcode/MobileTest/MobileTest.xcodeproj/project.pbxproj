@@ -11,6 +11,7 @@
 		3A9F1D33266E9C4D0013661F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A9F1D32266E9C4D0013661F /* AppDelegate.swift */; };
 		3A9F1D35266E9C4D0013661F /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A9F1D34266E9C4D0013661F /* SceneDelegate.swift */; };
 		3A9F1D37266E9C4D0013661F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A9F1D36266E9C4D0013661F /* ContentView.swift */; };
+		3AB0001A266E9C4D0013661F /* GreaseHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB0001B266E9C4D0013661F /* GreaseHook.swift */; };
 		3A9F1D39266E9C4F0013661F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3A9F1D38266E9C4F0013661F /* Assets.xcassets */; };
 		3A9F1D3C266E9C4F0013661F /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3A9F1D3B266E9C4F0013661F /* Preview Assets.xcassets */; };
 		3A9F1D3F266E9C4F0013661F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 3A9F1D3D266E9C4F0013661F /* LaunchScreen.storyboard */; };
@@ -44,6 +45,7 @@
 		3A9F1D32266E9C4D0013661F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		3A9F1D34266E9C4D0013661F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		3A9F1D36266E9C4D0013661F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		3AB0001B266E9C4D0013661F /* GreaseHook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GreaseHook.swift; sourceTree = "<group>"; };
 		3A9F1D38266E9C4F0013661F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3A9F1D3B266E9C4F0013661F /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		3A9F1D3E266E9C4F0013661F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -117,6 +119,7 @@
 				3A9F1D32266E9C4D0013661F /* AppDelegate.swift */,
 				3A9F1D34266E9C4D0013661F /* SceneDelegate.swift */,
 				3A9F1D36266E9C4D0013661F /* ContentView.swift */,
+				3AB0001B266E9C4D0013661F /* GreaseHook.swift */,
 				3A9F1D38266E9C4F0013661F /* Assets.xcassets */,
 				3A9F1D3D266E9C4F0013661F /* LaunchScreen.storyboard */,
 				3A9F1D40266E9C4F0013661F /* Info.plist */,
@@ -296,6 +299,7 @@
 				3A9F1D35266E9C4D0013661F /* SceneDelegate.swift in Sources */,
 				3A9F1D7A266EC1300013661F /* Bridge.m in Sources */,
 				3A9F1D37266E9C4D0013661F /* ContentView.swift in Sources */,
+				3AB0001A266E9C4D0013661F /* GreaseHook.swift in Sources */,
 				3A9F1D72266EBA870013661F /* JvmFuncsFallbacks.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
