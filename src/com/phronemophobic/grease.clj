@@ -249,6 +249,8 @@
         (sci/eval-string* ctx (slurp src)))
       (when-let [src (io/resource "grease/ios/uikit.clj")]
         (sci/eval-string* ctx (slurp src)))
+      (when-let [src (io/resource "grease/ios/bluetooth.clj")]
+        (sci/eval-string* ctx (slurp src)))
       ctx)))
 
 ;; =============================================================================

@@ -1,3 +1,4 @@
-{;; Teach kondo that defclass defines a var (first arg is the name).
+{;; Teach kondo that defclass / defclass! define a var (first arg is the name).
  ;; Without this, any reference to a defclass'd symbol is reported as unresolved.
- :lint-as {grease.ios.objc/defclass clojure.core/def}}
+ :lint-as {grease.ios.objc/defclass  clojure.core/def
+           grease.ios.repl/defclass! clojure.core/def}}
