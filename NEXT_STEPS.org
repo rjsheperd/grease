@@ -176,7 +176,7 @@ reference (held in a global atom to prevent GC).
   (msg-send :void task "resume"))
 #+end_src
 
-* Phase 3 — Struct Arg Handling (UIKit Frames) [2/3] :IN-PROGRESS:
+* Phase 3 — Struct Arg Handling (UIKit Frames) [3/3] :DONE:
 
 ~CGRect~, ~CGPoint~, ~CGSize~, and ~CGAffineTransform~ are C structs, not
 pointers. Most UIKit layout methods require them. Solved with scalar wrappers
@@ -219,70 +219,79 @@ Uses ~(__bridge UIView *)view~ cast + dot-syntax property access.
 Also includes: ~key-window~, ~root-view~, ~subviews~, ~describe-view~,
 ~new-label~, ~add-subview!~, ~remove-from-superview!~, ~get-center~, ~set-center!~.
 
-** TODO 3.3 Investigate ~objc_msgSend_stret~ for struct return via FFI
+** DONE 3.3 Investigate ~objc_msgSend_stret~ for struct return via FFI
 
-Determine if ~clj-libffi~ can call ~objc_msgSend_stret~ with a struct output
-buffer. If yes, eliminates the need for C shims for struct-returning methods.
-Low priority given the scalar-wrapper approach already works.
+Scalar wrapper approach (3.1) is working and sufficient on arm64 (iPhone XR,
+414×896 pt screen confirmed). ~objc_msgSend_stret~ is not needed — on arm64,
+small structs fit in registers but clj-libffi has no struct-return support.
+The shim strategy (one C function per scalar component) is the correct path.
 
-* Phase 4 — UIKit Live Manipulation
+* Phase 4 — UIKit Live Manipulation [0/3] :IN-PROGRESS:
 
-With the Foundation bridge and struct shims in place, the full UIKit view
-hierarchy becomes accessible from the nREPL.
+With the Foundation bridge and struct shims in place (Phase 3), the full UIKit
+view hierarchy is reachable from the nREPL. Phase 4 adds a reactive atom
+pattern and UILabel color/font configuration.
 
-** TODO 4.1 View hierarchy traversal helpers
+** TODO 4.1 UILabel styling helpers
+
+Add color and font configuration to ~grease.ios.uikit~:
 
 #+begin_src clojure
-(defn key-window []
-  (let [app (msg-send :pointer (get-class "UIApplication") "sharedApplication")]
-    (msg-send :pointer app "keyWindow")))
+(defn set-text-color! [label r g b a]
+  ;; UIColor colorWithRed:green:blue:alpha:
+  (let [color (msg-send :pointer (get-class "UIColor")
+                        "colorWithRed:green:blue:alpha:"
+                        :float64 r :float64 g :float64 b :float64 a)]
+    (msg-send :void label "setTextColor:" :pointer color)))
 
-(defn root-view []
-  (let [rvc (msg-send :pointer (key-window) "rootViewController")]
-    (msg-send :pointer rvc "view")))
+(defn set-background-color! [view r g b a]
+  (let [color (msg-send :pointer (get-class "UIColor")
+                        "colorWithRed:green:blue:alpha:"
+                        :float64 r :float64 g :float64 b :float64 a)]
+    (msg-send :void view "setBackgroundColor:" :pointer color)))
 
-(defn subviews [view]
-  (nsarray->vec (msg-send :pointer view "subviews")))
-
-(defn describe-view [view]
-  {:class (nsstring->str (msg-send :pointer (msg-send :pointer view "class") "description"))
-   :frame (get-frame view)
-   :subview-count (msg-send :int64 (msg-send :pointer view "subviews") "count")})
+(defn set-font-size! [label size]
+  (let [current-font (msg-send :pointer label "font")
+        name         (msg-send :pointer current-font "fontName")
+        new-font     (msg-send :pointer (get-class "UIFont")
+                               "fontWithName:size:" :pointer name :float64 size)]
+    (msg-send :void label "setFont:" :pointer new-font)))
 #+end_src
 
-** TODO 4.2 Create and add UI elements from REPL
+** TODO 4.2 Reactive atom → UILabel watch pattern
 
 #+begin_src clojure
-(dispatch-main-async
-  (fn []
-    (let [label (msg-send :pointer (get-class "UILabel") "new")]
-      (msg-send :void label "setText:" :pointer (->nsstring "Hello from REPL"))
-      (set-frame! label 20 100 300 44)
-      (msg-send :void (root-view) "addSubview:" :pointer label))))
-#+end_src
-
-** TODO 4.3 Reactive atom → UI update pattern
-
-#+begin_src clojure
+;; In your REPL session:
 (def ui-label (atom nil))
-
-(defn init-label! []
-  (dispatch-main-async
-    (fn []
-      (let [lbl (msg-send :pointer (get-class "UILabel") "new")]
-        (set-frame! lbl 20 100 300 44)
-        (msg-send :void (root-view) "addSubview:" :pointer lbl)
-        (reset! ui-label lbl)))))
-
 (def display-text (atom ""))
 
-(add-watch display-text :ui
-  (fn [_ _ _ new-val]
-    (dispatch-main-async
-      #(msg-send :void @ui-label "setText:" :pointer (->nsstring new-val)))))
+(on-main
+  (let [lbl (ui/new-label "Hello")]
+    (ui/set-frame! lbl 20 100 300 44)
+    (ui/add-subview! (ui/root-view) lbl)
+    (reset! ui-label lbl)))
 
-;; From nREPL, instantly updates the on-screen label:
-;; (reset! display-text "Updated!")
+(add-watch display-text :ui-sync
+  (fn [_ _ _ new-val]
+    (grease/dispatch-main-async
+      #(grease.ios.objc/msg-send :void @ui-label
+                                 "setText:" :pointer (f/->nsstring new-val)))))
+
+;; => (reset! display-text "Live from REPL!")
+#+end_src
+
+** TODO 4.3 Walk and print the full view hierarchy
+
+#+begin_src clojure
+(defn view-tree
+  "Returns a nested map of the view hierarchy rooted at view."
+  [view depth]
+  (let [info (on-main (ui/describe-view view))]
+    (assoc info :children
+           (mapv #(view-tree % (inc depth))
+                 (on-main (ui/subviews view))))))
+
+;; (clojure.pprint/pprint (view-tree (on-main (ui/root-view)) 0))
 #+end_src
 
 * Phase 5 — REPL Developer Experience [4/4] :DONE:

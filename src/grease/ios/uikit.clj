@@ -121,3 +121,64 @@
   "Removes view from its superview. Must be called on the main thread."
   [view]
   (objc-rt/msg-send :void view "removeFromSuperview"))
+
+;; =============================================================================
+;; Styling helpers
+;; =============================================================================
+
+(defn- make-color
+  "Creates a UIColor from RGBA components (0.0–1.0 each)."
+  [r g b a]
+  (objc-rt/msg-send :pointer
+                    (grease/get-objc-class "UIColor")
+                    "colorWithRed:green:blue:alpha:"
+                    :float64 (double r)
+                    :float64 (double g)
+                    :float64 (double b)
+                    :float64 (double a)))
+
+(defn set-text-color!
+  "Sets the text color of label. r g b a are 0.0–1.0.
+  Must be called on the main thread."
+  [label r g b a]
+  (objc-rt/msg-send :void label "setTextColor:" :pointer (make-color r g b a)))
+
+(defn set-background-color!
+  "Sets the background color of view. r g b a are 0.0–1.0.
+  Must be called on the main thread."
+  [view r g b a]
+  (objc-rt/msg-send :void view "setBackgroundColor:" :pointer (make-color r g b a)))
+
+(defn set-font-size!
+  "Sets the font size of label, preserving the current font family.
+  Must be called on the main thread."
+  [label size]
+  (let [current-font (objc-rt/msg-send :pointer label "font")
+        font-name    (objc-rt/msg-send :pointer current-font "fontName")
+        new-font     (objc-rt/msg-send :pointer
+                                       (grease/get-objc-class "UIFont")
+                                       "fontWithName:size:"
+                                       :pointer font-name
+                                       :float64 (double size))]
+    (objc-rt/msg-send :void label "setFont:" :pointer new-font)))
+
+(defn set-text-alignment!
+  "Sets the text alignment of label.
+  alignment: 0=left 1=center 2=right 3=justified 4=natural.
+  Must be called on the main thread."
+  [label alignment]
+  (objc-rt/msg-send :void label "setTextAlignment:" :int64 (long alignment)))
+
+;; =============================================================================
+;; View hierarchy walker
+;; =============================================================================
+
+(defn view-tree
+  "Returns a nested map {:class :frame :subview-count :children} for the
+  view hierarchy rooted at view. Depth controls recursion limit (default 4)."
+  ([view] (view-tree view 4))
+  ([view depth]
+   (let [info (describe-view view)]
+     (if (pos? depth)
+       (assoc info :children (mapv #(view-tree % (dec depth)) (subviews view)))
+       info))))
