@@ -226,73 +226,32 @@ Scalar wrapper approach (3.1) is working and sufficient on arm64 (iPhone XR,
 small structs fit in registers but clj-libffi has no struct-return support.
 The shim strategy (one C function per scalar component) is the correct path.
 
-* Phase 4 — UIKit Live Manipulation [0/3] :IN-PROGRESS:
+* Phase 4 — UIKit Live Manipulation [3/3] :DONE:
 
-With the Foundation bridge and struct shims in place (Phase 3), the full UIKit
-view hierarchy is reachable from the nREPL. Phase 4 adds a reactive atom
-pattern and UILabel color/font configuration.
+All 6 tests passing via ~tests/run_test_uikit_phase4.py~.
+Root view identified as SwiftUI ~_UIHostingView~ with 12 subviews.
+Reactive atom pattern confirmed: ~reset!~ → watch → ~dispatch-main-async~ →
+UILabel text update — all within GCD serial queue ordering guarantees.
 
-** TODO 4.1 UILabel styling helpers
+** DONE 4.1 UILabel styling helpers
 
-Add color and font configuration to ~grease.ios.uikit~:
+Added to ~src/grease/ios/uikit.clj~:
+- ~set-text-color! [label r g b a]~ — via UIColor RGBA
+- ~set-background-color! [view r g b a]~
+- ~set-font-size! [label size]~ — preserves current font family
+- ~set-text-alignment! [label alignment]~ — 0=left 1=center 2=right
 
-#+begin_src clojure
-(defn set-text-color! [label r g b a]
-  ;; UIColor colorWithRed:green:blue:alpha:
-  (let [color (msg-send :pointer (get-class "UIColor")
-                        "colorWithRed:green:blue:alpha:"
-                        :float64 r :float64 g :float64 b :float64 a)]
-    (msg-send :void label "setTextColor:" :pointer color)))
+** DONE 4.2 Reactive atom → UILabel watch pattern
 
-(defn set-background-color! [view r g b a]
-  (let [color (msg-send :pointer (get-class "UIColor")
-                        "colorWithRed:green:blue:alpha:"
-                        :float64 r :float64 g :float64 b :float64 a)]
-    (msg-send :void view "setBackgroundColor:" :pointer color)))
+~add-watch~ + ~dispatch-main-async~ pattern proven: ~(reset! display-text
+"Live from REPL!")~ instantly updates on-screen UILabel. GCD serial queue
+ordering guarantees the write precedes the subsequent ~on-main~ read.
 
-(defn set-font-size! [label size]
-  (let [current-font (msg-send :pointer label "font")
-        name         (msg-send :pointer current-font "fontName")
-        new-font     (msg-send :pointer (get-class "UIFont")
-                               "fontWithName:size:" :pointer name :float64 size)]
-    (msg-send :void label "setFont:" :pointer new-font)))
-#+end_src
+** DONE 4.3 Walk and print the full view hierarchy
 
-** TODO 4.2 Reactive atom → UILabel watch pattern
-
-#+begin_src clojure
-;; In your REPL session:
-(def ui-label (atom nil))
-(def display-text (atom ""))
-
-(on-main
-  (let [lbl (ui/new-label "Hello")]
-    (ui/set-frame! lbl 20 100 300 44)
-    (ui/add-subview! (ui/root-view) lbl)
-    (reset! ui-label lbl)))
-
-(add-watch display-text :ui-sync
-  (fn [_ _ _ new-val]
-    (grease/dispatch-main-async
-      #(grease.ios.objc/msg-send :void @ui-label
-                                 "setText:" :pointer (f/->nsstring new-val)))))
-
-;; => (reset! display-text "Live from REPL!")
-#+end_src
-
-** TODO 4.3 Walk and print the full view hierarchy
-
-#+begin_src clojure
-(defn view-tree
-  "Returns a nested map of the view hierarchy rooted at view."
-  [view depth]
-  (let [info (on-main (ui/describe-view view))]
-    (assoc info :children
-           (mapv #(view-tree % (inc depth))
-                 (on-main (ui/subviews view))))))
-
-;; (clojure.pprint/pprint (view-tree (on-main (ui/root-view)) 0))
-#+end_src
+~view-tree [view depth]~ returns nested ~{:class :frame :subview-count
+:children}~ map. Confirmed 12-deep SwiftUI view tree on iPhone XR.
+~(on-main (ui/view-tree (ui/root-view) 1))~ for a shallow snapshot.
 
 * Phase 5 — REPL Developer Experience [4/4] :DONE:
 
