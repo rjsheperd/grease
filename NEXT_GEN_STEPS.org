@@ -228,25 +228,70 @@ clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' -M tests/test_engine.c
 
 Gate: every Foundation operation via engine matches oracle output.
 
-*** TODO 1.2.1 Audit engine namespaces for SCI compatibility
+*** DONE 1.2.1 Audit engine namespaces for SCI compatibility
 
-Read each of the seven engine source files and flag any form that cannot
-execute in a frozen SCI native image.  Known risks:
+Read all seven engine source files.  Findings below.  Only one namespace
+has blocking issues; everything else is safe.
 
-| Namespace              | Risk                    | Notes                                    |
-|------------------------+-------------------------+------------------------------------------|
-| ~grease.ios.types~     | ~requiring-resolve~     | Resolves coercer symbols lazily at call  |
-| ~grease.ios.naming~    | ~defmulti~/~defmethod~  | SCI supports both — low risk             |
-| ~grease.ios.spec~      | ~clojure.java.io/resource~ + ~slurp~ | ~io/resource~ available in SCI |
-| ~grease.ios.registry~  | none obvious            | Pure atoms and maps                      |
-| ~grease.ios.invoke~    | none obvious            | Uses already-loaded ~objc/msg-send~      |
-| ~grease.ios.patterns~  | ~defclass!~ via objc-rt | objc-rt already in SCI context           |
-| ~grease.ios.api~       | ~requiring-resolve~ (via types) | Same risk as types               |
+**** ~grease.ios.types~ — BLOCK (two ~requiring-resolve~ calls)
 
-Deliverable: annotated list (comments in source or a REPL log) of every
-form that needs fixing before Step 1.2.2.
+1. ~resolve-coercer~ (line 44) — called during ~init!~ to resolve coercer
+   symbols (e.g. ~'grease.ios.foundation/->nsstring~).
+   ~requiring-resolve~ goes through the JVM classloader; in frozen SCI,
+   it is unreliable.  Fix: replace with ~resolve~, which is sufficient
+   because foundation is already eval'd into SCI before types loads.
 
-*** TODO 1.2.2 Fix ~requiring-resolve~ in ~grease.ios.types~
+2. Inline in ~coerce-in~ (line 105): ~(requiring-resolve 'grease.ios.foundation/null-ptr)~.
+   Called on *every* nil-pointer coercion.  Even if the frozen-image issue
+   were absent this would be slow.  Fix: cache ~null-ptr~ as a ~delay~ or
+   resolve it once during ~init!~.
+
+**** ~grease.ios.naming~ — SAFE
+
+~defmulti~ / ~defmethod~, ~re-pattern~, ~clojure.java.io/resource~,
+~clojure.edn~, ~clojure.string~ — all available in SCI.  No issues.
+
+**** ~grease.ios.spec~ — SAFE (verify ~slurp~ on URL at runtime)
+
+~io/resource~ returns a ~java.net.URL~; ~slurp~ on a URL is standard
+Clojure and works in SCI.  Resources are bundled in the native image
+via GraalVM ~--initialize-at-build-time~, so ~io/resource~ resolves at
+runtime.  Low risk; worth a quick sanity check in the REPL after 1.2.3.
+
+**** ~grease.ios.registry~ — SAFE
+
+~defonce~, ~clojure.string/lower-case~, atoms, maps.  No issues.
+
+**** ~grease.ios.invoke~ — SAFE
+
+Plain encoding-map lookups, ~mapcat~, calls ~objc/msg-send~,
+~patterns/wrap-arg~, ~types/coerce-in/out~.  No ~requiring-resolve~.
+No issues.
+
+**** ~grease.ios.patterns~ — SAFE (one Java interop to note)
+
+~defmulti~ / ~defmethod~ — SCI supports both.  ~defonce~ — fine.
+~(Math/abs (int (hash ...)))~ — SCI exposes ~Math/abs~; not a concern.
+
+**** ~grease.ios.api~ — SAFE (indirect dependency on types fix)
+
+~defrecord ObjcObject~, ~instance?~, no direct ~requiring-resolve~.
+Calls ~types/init!~, so it inherits the block from types — but once
+1.2.2 is fixed, api is clean.
+
+**** Verdict
+
+| Namespace              | Status | Action needed              |
+|------------------------+--------+----------------------------|
+| ~grease.ios.types~     | BLOCK  | Fix 2 ~requiring-resolve~ calls (→ 1.2.2) |
+| ~grease.ios.naming~    | SAFE   | None                       |
+| ~grease.ios.spec~      | SAFE   | Sanity-check ~slurp~ on URL post-deploy |
+| ~grease.ios.registry~  | SAFE   | None                       |
+| ~grease.ios.invoke~    | SAFE   | None                       |
+| ~grease.ios.patterns~  | SAFE   | None                       |
+| ~grease.ios.api~       | SAFE   | Depends on types fix       |
+
+*** DONE 1.2.2 Fix ~requiring-resolve~ in ~grease.ios.types~
 
 ~requiring-resolve~ triggers a runtime classloader call that fails in a
 frozen GraalVM native image.  The coercer symbols (e.g.
@@ -261,7 +306,7 @@ Options (pick the simplest that passes JVM tests):
 Gate: all existing ~types_test.clj~ assertions pass; no ~requiring-resolve~
 calls remain in ~grease.ios.types~.
 
-*** TODO 1.2.3 Add engine namespaces to the SCI preload block
+*** DONE 1.2.3 Add engine namespaces to the SCI preload block
 
 In ~src/com/phronemophobic/grease.clj~, extend the ~sci-ctx~ delay block
 (currently line ~242~) to eval the engine in strict dependency order after
@@ -283,7 +328,7 @@ In ~src/com/phronemophobic/grease.clj~, extend the ~sci-ctx~ delay block
 Gate: app starts without error; ~(require '[grease.ios.api :as ios])~ in
 the nREPL returns without "Could not find namespace".
 
-*** TODO 1.2.4 Auto-load specs at startup
+*** DONE 1.2.4 Auto-load specs at startup
 
 Decide eager vs. lazy spec loading and implement.  Recommendation: eager —
 call ~(grease.ios.spec/load-all)~ inside the ~sci-ctx~ delay block
@@ -298,7 +343,7 @@ immediately after the engine preloads.  Adds ~1s to app startup but makes
 Gate: fresh nREPL session can call ~(grease.ios.api/call ...)~ immediately,
 without first calling ~(ios/load!)~.
 
-*** TODO 1.2.5 Write ~tests/test_engine.clj~
+*** DONE 1.2.5 Write ~tests/test_engine.clj~
 
 Clojure integration test (follows ~tests/test_runner.clj~ pattern) covering:
 

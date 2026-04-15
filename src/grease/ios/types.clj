@@ -38,10 +38,11 @@
   (atom {}))
 
 (defn- resolve-coercer
-  "Resolves a coercer symbol to a function via requiring-resolve.
+  "Resolves a coercer symbol to a function via [[resolve]].
+  Namespaces must already be loaded before calling this.
   Returns the function or throws with a helpful message."
   [sym]
-  (or (requiring-resolve sym)
+  (or (resolve sym)
       (throw (ex-info (str "Cannot resolve coercer: " sym)
                       {:sym sym}))))
 
@@ -59,6 +60,12 @@
     (when-not res
       (throw (ex-info "Cannot find grease/types.edn on classpath" {})))
     (into {} (map load-entry (edn/read-string {:readers {}} (slurp res))))))
+
+;; Lazily resolved reference to grease.ios.foundation/null-ptr.
+;; Deferred until first use so load order between types and foundation is flexible.
+(def ^:private null-ptr-ref
+  (delay (or (resolve 'grease.ios.foundation/null-ptr)
+             (throw (ex-info "Cannot resolve grease.ios.foundation/null-ptr — load foundation first" {})))))
 
 (defn init!
   "Loads types.edn and populates the type table.
@@ -101,8 +108,8 @@
       (throw (ex-info (str "Unknown type in coerce-in: " type-name)
                       {:type-name type-name})))
     (if (and (= "@" (:encoding entry)) (nil? value))
-      ;; nil pointer: call null-ptr helper rather than passing Java nil to FFI
-      ((requiring-resolve 'grease.ios.foundation/null-ptr))
+      ;; nil pointer: call cached null-ptr helper (avoids requiring-resolve on hot path)
+      ((@null-ptr-ref))
       ((:coerce-in-fn entry) value))))
 
 (defn coerce-out

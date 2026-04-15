@@ -253,6 +253,19 @@
         (sci/eval-string* ctx (slurp src)))
       (when-let [src (io/resource "grease/ios/camera.clj")]
         (sci/eval-string* ctx (slurp src)))
+      ;; Engine — data-driven API (dependency order: types first, api last)
+      (doseq [path ["grease/ios/types.clj"
+                    "grease/ios/naming.clj"
+                    "grease/ios/spec.clj"
+                    "grease/ios/registry.clj"
+                    "grease/ios/invoke.clj"
+                    "grease/ios/patterns.clj"
+                    "grease/ios/api.clj"]]
+        (when-let [src (io/resource path)]
+          (sci/eval-string* ctx (slurp src))))
+      ;; Initialise naming + types + registry in dependency order via the public API.
+      ;; This makes ios/call available immediately without a manual (api/load!).
+      (sci/eval-string* ctx "(grease.ios.api/load!)")
       ctx)))
 
 ;; =============================================================================

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# tests/run_tests — run all Clojure integration tests against the device nREPL.
+#
+# Prerequisites:
+#   - App deployed and running (scripts/debug-demo-app --noinstall)
+#   - nREPL listening at NREPL_HOST:NREPL_PORT (default 192.168.0.111:23456)
+#
+# Usage:
+#   tests/run_tests                     # all tests except location (needs GPS)
+#   tests/run_tests --all               # all tests including location
+#   tests/run_tests foundation repl     # specific suites only
+#
+# Available suite names:
+#   foundation  repl  bluetooth  blocks  uikit  engine  frameworks  location
+
+set -euo pipefail
+
+CLJ_CMD="clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}' -M"
+
+SUITES_DEFAULT=(foundation repl bluetooth blocks uikit engine frameworks)
+SUITES_ALL=(foundation repl bluetooth blocks uikit engine frameworks location)
+
+declare -A SUITE_FILE=(
+  [foundation]="tests/test_foundation.clj"
+  [repl]="tests/test_repl.clj"
+  [bluetooth]="tests/test_bluetooth.clj"
+  [blocks]="tests/test_blocks.clj"
+  [uikit]="tests/test_uikit.clj"
+  [engine]="tests/test_engine.clj"
+  [frameworks]="tests/test_frameworks.clj"
+  [location]="tests/test_location.clj"
+)
+
+run_all=false
+selected=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --all) run_all=true ;;
+    *)     selected+=("$arg") ;;
+  esac
+done
+
+if [[ ${#selected[@]} -gt 0 ]]; then
+  suites=("${selected[@]}")
+elif $run_all; then
+  suites=("${SUITES_ALL[@]}")
+else
+  suites=("${SUITES_DEFAULT[@]}")
+fi
+
+passed=0
+failed=0
+failed_suites=()
+
+for suite in "${suites[@]}"; do
+  file="${SUITE_FILE[$suite]:-}"
+  if [[ -z "$file" ]]; then
+    echo "Unknown suite: $suite  (valid: ${!SUITE_FILE[*]})" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Running: $suite  ($file)"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  if clj -Sdeps '{"deps" {"nrepl/nrepl" {"mvn/version" "1.3.0"}}}' -M "$file"; then
+    ((passed++))
+  else
+    ((failed++))
+    failed_suites+=("$suite")
+  fi
+done
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  SUMMARY: $passed passed, $failed failed  (${#suites[@]} suites)"
+if [[ ${#failed_suites[@]} -gt 0 ]]; then
+  echo "  FAILED:  ${failed_suites[*]}"
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+[[ $failed -eq 0 ]]
