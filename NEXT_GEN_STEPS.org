@@ -412,7 +412,12 @@ Public API: build-encoding, normalize-method-ref, normalize-class-doc, framework
 ObjC type mapping table (objc->grease) covers 20 common types + id fallback.
 Known limitation: protocol-typed args (id<Protocol>) may default to "id" type.
 
-** TODO 6.3 Scrape the framework list
+** IN-PROGRESS 6.3 Scrape the framework list
+
+CLI runner: ~clj -M -m grease.scrape.run CoreLocation AVFoundation~
+Writes EDN to ~resources/grease/api-specs/<Framework>.edn~; updates manifest.
+Requires network (fetches from Apple docs API). Cached to ~.cache/apple-docs/~.
+8 runner tests, 15 assertions — no network required for CI.
 
 | Framework | Key Classes | Notes |
 |-----------+--------------+-------|
