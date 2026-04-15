@@ -234,3 +234,43 @@ void call_clj_fn(void (*clj_fn_ptr)(graal_isolatethread_t *)) {
     fn_ptr = clj_fn_ptr;
     fn_ptr(thread);
 }
+
+// =============================================================================
+// Block factory shims
+//
+// Wrap a clj-libffi ffi_closure pointer (plain C function pointer) in an ObjC
+// heap block.  The block calling convention on arm64 passes the block itself as
+// an implicit first argument to the invoke function; our shim ignores it and
+// calls straight through to the ffi_closure, which routes into the Clojure fn.
+//
+// Ownership: __bridge_retained transfers the +1 retain from ARC to the caller.
+// The caller (Clojure side) holds the block pointer in an atom to prevent GC.
+// =============================================================================
+
+void *grease_make_void_block(GreaseVoidFn fn) {
+    void (^blk)(void) = ^{ fn(); };
+    void (^heap)(void) = [blk copy];
+    return (__bridge_retained void *)heap;
+}
+
+void *grease_make_data_block(GreaseDataFn fn) {
+    void (^blk)(NSData *, NSURLResponse *, NSError *) =
+        ^(NSData *data, NSURLResponse *response, NSError *error) {
+            fn((__bridge void *)data, (__bridge void *)response, (__bridge void *)error);
+        };
+    void (^heap)(NSData *, NSURLResponse *, NSError *) = [blk copy];
+    return (__bridge_retained void *)heap;
+}
+
+void *grease_make_bool_error_block(GrallBoolErrFn fn) {
+    void (^blk)(BOOL, NSError *) = ^(BOOL success, NSError *error) {
+        fn((int)success, (__bridge void *)error);
+    };
+    void (^heap)(BOOL, NSError *) = [blk copy];
+    return (__bridge_retained void *)heap;
+}
+
+void grease_call_void_block(void *block) {
+    void (^b)(void) = (__bridge void (^)(void))block;
+    b();
+}

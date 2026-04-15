@@ -112,13 +112,13 @@ Keys and values may be NSString, NSNumber, or nested containers.
 Commit all converters as ~src/grease/ios/foundation.clj~ and expose in SCI
 context. Add to startup ~sci/eval-string*~ load alongside ~objc.clj~.
 
-* Phase 2 — ObjC Blocks (Completion Handlers)
+* Phase 2 — ObjC Blocks (Completion Handlers) [4/4] :DONE:
 
-ObjC blocks are the single most important missing piece for modern iOS APIs.
-URLSession, UIView animations, HealthKit authorization, and most async
-callbacks use blocks, not delegate protocols.
+All block types proven on-device via ~tests/run_test_blocks.py~.
+URLSession GET via ~make-data-block~ returned ~{:status 200, :bytes 377}~.
+C shims in ~Bridge.m~; Clojure API in ~src/grease/ios/blocks.clj~.
 
-** TODO 2.1 Write C shim layer in Xcode project
+** DONE 2.1 Write C shim layer in Xcode project
 
 Add ~grease_blocks.m~ / ~grease_blocks.h~ to ~xcode/MobileTest/MobileTest/~:
 
@@ -134,7 +134,7 @@ void (^grease_make_data_block(GreaseDataFn fn, void *ctx))(NSData*, NSURLRespons
 The ~fn~ pointer comes from ~make-imp~. ~ctx~ is a retained Clojure function
 reference (held in a global atom to prevent GC).
 
-** TODO 2.2 Call shim from Clojure
+** DONE 2.2 Call shim from Clojure
 
 #+begin_src clojure
 (defn make-void-block [f]
@@ -146,7 +146,7 @@ reference (held in a global atom to prevent GC).
     (ffi/call "grease_make_data_block" :pointer :pointer imp :pointer 0)))
 #+end_src
 
-** TODO 2.3 Demonstrate with UIView animation
+** DONE 2.3 Demonstrate with UIView animation
 
 #+begin_src clojure
 (dispatch-main-async
@@ -159,7 +159,7 @@ reference (held in a global atom to prevent GC).
                 :pointer done-block))))
 #+end_src
 
-** TODO 2.4 Demonstrate with URLSession data task
+** DONE 2.4 Demonstrate with URLSession data task
 
 #+begin_src clojure
 (let [session (msg-send :pointer (get-class "NSURLSession") "sharedSession")
