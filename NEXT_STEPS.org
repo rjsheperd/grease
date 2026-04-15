@@ -281,7 +281,7 @@ must be unique per process — each re-eval creates ~MyDelegate_v1~, ~_v2~, etc.
 Loaded via ~sci/eval-string*~ in ~grease.clj~ startup alongside ~objc.clj~,
 ~foundation.clj~, and ~blocks.clj~. Available from nREPL without rebuild.
 
-* Phase 6 — Additional Delegate Frameworks [1/5]
+* Phase 6 — Additional Delegate Frameworks [2/5]
 
 With ~defclass~ proven, every delegate-based framework follows the same
 three-step pattern: ~defclass~ → set delegate → ~msg-send~ to start.
@@ -311,34 +311,24 @@ three-step pattern: ~defclass~ → set delegate → ~msg-send~ to start.
 
 Note: ~NSBluetoothAlwaysUsageDescription~ already in Info.plist.
 
-** TODO 6.2 AVFoundation / Camera
+** DONE 6.2 AVFoundation / Camera
 
-~src/grease/ios/camera.clj~ — delegate + session setup:
+~src/grease/ios/camera.clj~ — proven on-device via ~scripts/repl-eval~:
+- 57 frames in ~2 seconds after ~start-session!~; ~@camera/last-frame~ non-nil
+- ~authorization-status~, ~request-authorization!~, ~running?~ all working
+- ~dispatch_queue_create~ findable via dlsym (unlike ~dispatch_get_main_queue~)
+- ~NSCameraUsageDescription~ already in Info.plist
 
 #+begin_src clojure
-;; REPL test sequence:
-(require '[grease.ios.camera :as cam])
+(require '[grease.ios.camera :as camera])
 (require '[grease.ios.repl :refer [on-main]])
 
-;; 1. Check authorization status (0=not-determined 1=restricted 2=denied 3=authorized)
-(scripts/repl-eval
-  "(cam/authorization-status)")
-
-;; 2. Request permission (triggers system dialog)
-(on-main (cam/request-authorization!
-          (fn [granted?] (println "Camera granted:" granted?))))
-
-;; 3. Start session and capture frames
-(on-main (cam/start-session!))
-;; => @cam/last-frame updates when frames arrive
-
-;; 4. Stop session
-(on-main (cam/stop-session!))
+(camera/authorization-status)   ;; => :authorized (after first dialog accept)
+(on-main (camera/start-session!))
+@camera/frame-count              ;; => 57 (after ~2s)
+@camera/last-frame               ;; => CMSampleBufferRef pointer
+(on-main (camera/stop-session!))
 #+end_src
-
-Requires ~NSCameraUsageDescription~ in Info.plist (add if missing).
-Frame pixel data needs C shims for ~CMSampleBufferGetImageBuffer~ +
-~CVPixelBufferLockBaseAddress~ to extract raw bytes.
 
 ** TODO 6.3 HealthKit
 
