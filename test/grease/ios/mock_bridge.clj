@@ -17,7 +17,8 @@
     (mock/with-responses {\"status\" 1}
       (grease.ios.invoke/get-prop {:class-name \"AVPlayer\"} :status))
     ;; => 1  (raw int, before enum decode)"
-  (:require [clojure.test :refer [is]]))
+  (:require [clojure.test :refer [is]]
+            [grease.ios.blocks]))
 
 ;; =============================================================================
 ;; Call recorder
@@ -25,17 +26,25 @@
 
 (def ^:private call-log (atom []))
 (def ^:private response-map (atom {}))
+;; Captured block sentinels from mock-make-*-block.
+(def ^:private block-log (atom []))
 
 (defn calls
   "Returns the list of recorded calls since last clear! or with-mock."
   []
   @call-log)
 
+(defn captured-blocks
+  "Returns the list of block sentinels captured since last clear! or with-mock."
+  []
+  @block-log)
+
 (defn clear!
-  "Clears the call log and response map."
+  "Clears the call log, response map, and block log."
   []
   (reset! call-log [])
-  (reset! response-map {}))
+  (reset! response-map {})
+  (reset! block-log []))
 
 (defn set-response!
   "Registers a canned return value for a given ObjC selector string."
@@ -83,19 +92,53 @@
   ::main-queue)
 
 ;; =============================================================================
+;; Block mock implementations
+;; =============================================================================
+
+(defn mock-make-void-block
+  "Records block creation and returns a sentinel map containing the wrapped fn."
+  [f]
+  (let [sentinel {:block-type :void :fn f}]
+    (swap! block-log conj sentinel)
+    sentinel))
+
+(defn mock-make-data-block
+  "Records block creation and returns a sentinel map containing the wrapped fn."
+  [f]
+  (let [sentinel {:block-type :data :fn f}]
+    (swap! block-log conj sentinel)
+    sentinel))
+
+(defn mock-make-bool-error-block
+  "Records block creation and returns a sentinel map containing the wrapped fn."
+  [f]
+  (let [sentinel {:block-type :bool-error :fn f}]
+    (swap! block-log conj sentinel)
+    sentinel))
+
+(defn invoke-block!
+  "Invokes a captured block sentinel's wrapped fn with the given args.
+  Use in tests to simulate the iOS runtime invoking a completion handler."
+  [block & args]
+  (apply (:fn block) args))
+
+;; =============================================================================
 ;; with-mock macro
 ;; =============================================================================
 
 (defmacro with-mock
   "Runs body with all bridge functions replaced by recording mocks.
-  Clears the call log before executing body.
+  Clears the call log and block log before executing body.
   Returns the value of body."
   [& body]
-  `(with-redefs [grease.ios.objc/msg-send        mock-msg-send
-                 com.phronemophobic.grease/get-objc-class mock-get-class
-                 com.phronemophobic.grease/objc-new       mock-objc-new
-                 grease.ios.foundation/null-ptr   mock-null-ptr
-                 grease.ios.foundation/main-queue mock-main-queue]
+  `(with-redefs [grease.ios.objc/msg-send                  mock-msg-send
+                 com.phronemophobic.grease/get-objc-class   mock-get-class
+                 com.phronemophobic.grease/objc-new         mock-objc-new
+                 grease.ios.foundation/null-ptr             mock-null-ptr
+                 grease.ios.foundation/main-queue           mock-main-queue
+                 grease.ios.blocks/make-void-block          mock-make-void-block
+                 grease.ios.blocks/make-data-block          mock-make-data-block
+                 grease.ios.blocks/make-bool-error-block    mock-make-bool-error-block]
      (clear!)
      ~@body))
 

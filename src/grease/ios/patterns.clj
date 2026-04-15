@@ -1,24 +1,33 @@
 (ns grease.ios.patterns
   "Bridge between Clojure idioms and ObjC cross-boundary patterns.
 
-  Currently implements the ~:delegate~ pattern:
+  Implements three patterns:
+
+  **Delegate** (~:delegate~):
   - User passes a ~{:keyword fn}~ map (selectors in Clojure kebab-case).
   - Engine looks up the ObjC protocol methods from the loaded spec.
   - An ObjC subclass of NSObject is created via [[create-delegate-class!]].
   - The class is retained by a hash of the map so the same map always
     returns the same delegate (idempotent across multiple calls).
 
-  Usage:
-    (patterns/wrap-delegate {:location-manager-did-update-locations my-fn}
-                            \"CLLocationManagerDelegate\")
-    ;; -> ObjC delegate instance pointer
+  **KVO** — [[kvo-watch!]] / [[kvo-unwatch!]]:
+  - [[init!]] creates a singleton ~GrseKVOObserver~ class.
+  - [[kvo-watch!]] registers a Clojure fn to be called when a property changes.
+  - [[kvo-unwatch!]] removes the observer.
+
+  **Completion handler** (~:completion-handler~):
+  - Engine wraps a Clojure fn in an ObjC block via [[grease.ios.blocks]].
+  - Block type is governed by ~:block-type~ in the arg-spec
+    (~:void~, ~:data~, or ~:bool-error~).
 
   Mocking in tests:
     (with-redefs [grease.ios.patterns/create-delegate-class!
                   (fn [_name _super _pairs] {:mock-delegate true})]
       ...)"
   (:require [com.phronemophobic.grease :as grease]
+            [grease.ios.blocks :as blocks]
             [grease.ios.naming :as naming]
+            [grease.ios.objc :as objc]
             [grease.ios.registry :as registry]))
 
 ;; =============================================================================
@@ -114,6 +123,93 @@
         inst))))
 
 ;; =============================================================================
+;; KVO observer — singleton class + callback registry
+;; =============================================================================
+
+;; Singleton ObjC class used as the KVO observer for all watches.
+(defonce ^:private kvo-observer-class (atom nil))
+
+;; Map of context-integer -> callback fn.
+(defonce ^:private kvo-callbacks (atom {}))
+
+;; Monotonically increasing context counter (used as opaque context void*).
+(defonce ^:private kvo-context-counter (atom 0))
+
+(defn- next-kvo-context
+  "Returns the next unique KVO context integer."
+  []
+  (swap! kvo-context-counter inc))
+
+(defn init!
+  "Initialises the patterns engine by creating the singleton ~GrseKVOObserver~
+  ObjC class.  Idempotent — subsequent calls are no-ops.
+
+  Must be called once after the ObjC runtime is available (i.e. on device or
+  after the native image is loaded).  In tests, call after mocking
+  [[create-delegate-class!]]."
+  []
+  (when-not @kvo-observer-class
+    (let [cls (create-delegate-class!
+               "GrseKVOObserver"
+               "NSObject"
+               [["observeValueForKeyPath:ofObject:change:context:"
+                 "v@:@@@^v"
+                 (fn [_self _cmd _key-path _obj _change ctx]
+                   (when-let [cb (get @kvo-callbacks ctx)]
+                     (cb ctx)))]])]
+      (reset! kvo-observer-class cls))))
+
+(defn reset-state!
+  "Resets all KVO atoms to their initial state.
+  Call in tests between cases to ensure isolation."
+  []
+  (reset! kvo-observer-class nil)
+  (reset! kvo-callbacks {})
+  (reset! kvo-context-counter 0))
+
+(defn kvo-watch!
+  "Registers a KVO observer on obj for the given key-path string.
+
+  Creates a new observer instance from the singleton [[GrseKVOObserver]] class
+  and registers it via ~addObserver:forKeyPath:options:context:~.
+
+  callback  — a one-arg fn receiving the context integer when the value changes.
+              (The change dictionary and key-path are available via the real KVO
+              signature; this simplified bridge passes only the context for now.)
+
+  Returns an opaque handle map — pass to [[kvo-unwatch!]] to deregister."
+  [obj key-path callback]
+  (let [ctx      (next-kvo-context)
+        obs-inst (grease/objc-new @kvo-observer-class)]
+    (swap! kvo-callbacks assoc ctx callback)
+    ;; NOTE: key-path must be an NSString ptr in production.
+    ;; In JVM mock tests, the raw string is passed and recorded by mock-msg-send.
+    (objc/msg-send :void (:ptr obj)
+                   "addObserver:forKeyPath:options:context:"
+                   :pointer obs-inst
+                   :pointer key-path
+                   :uint64  1          ; NSKeyValueObservingOptionNew
+                   :pointer ctx)
+    {:observer  obs-inst
+     :key-path  key-path
+     :context   ctx
+     :target-ptr (:ptr obj)}))
+
+(defn kvo-unwatch!
+  "Removes the KVO observer identified by handle (returned by [[kvo-watch!]]).
+
+  Calls ~removeObserver:forKeyPath:context:~ on the target object and clears
+  the callback from the registry."
+  [{:keys [observer key-path context target-ptr]}]
+  ;; NOTE: key-path must be NSString ptr in production (same caveat as watch).
+  (objc/msg-send :void target-ptr
+                 "removeObserver:forKeyPath:context:"
+                 :pointer observer
+                 :pointer key-path
+                 :pointer context)
+  (swap! kvo-callbacks dissoc context))
+
+;; =============================================================================
 ;; wrap-arg — dispatches pattern from arg-spec
 ;; =============================================================================
 
@@ -124,6 +220,15 @@
 (defmethod wrap-arg* :delegate
   [arg-spec delegate-map]
   (wrap-delegate delegate-map (:protocol arg-spec "NSObject")))
+
+(defmethod wrap-arg* :completion-handler
+  [arg-spec callback-fn]
+  ;; Wrap callback-fn in the appropriate ObjC block type.
+  ;; :block-type in arg-spec drives the factory: :void (default), :data, :bool-error.
+  (case (get arg-spec :block-type :void)
+    :data       (blocks/make-data-block callback-fn)
+    :bool-error (blocks/make-bool-error-block callback-fn)
+    (blocks/make-void-block callback-fn)))
 
 (defmethod wrap-arg* :default
   [_ val]

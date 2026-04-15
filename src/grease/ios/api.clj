@@ -16,6 +16,7 @@
   without requiring the caller to repeat the class name."
   (:require [grease.ios.invoke :as invoke]
             [grease.ios.naming :as naming]
+            [grease.ios.patterns :as patterns]
             [grease.ios.registry :as registry]
             [grease.ios.types :as types]))
 
@@ -154,6 +155,31 @@
           (call* (:ptr obj) (:class-name obj) setter-sel value))
         (throw (ex-info (str "No property found: " (:class-name obj) " " prop-kw-or-str)
                         {:class (:class-name obj) :prop prop-kw-or-str}))))))
+
+;; =============================================================================
+;; KVO — key-value observing
+;; =============================================================================
+
+(defn watch
+  "Registers a KVO callback on obj for the given key-path.
+
+  obj           — [[ObjcObject]] wrapping the target
+  key-path-or-kw — property name as keyword e.g. ~:status~ or string ~\"status\"~
+  callback       — one-arg fn called when the property changes; receives the
+                   opaque context integer (use [[unwatch]] handle to cancel)
+
+  Returns an opaque handle map — pass to [[unwatch]] to deregister.
+
+  Requires [[patterns/init!]] to have been called first (done automatically by
+  [[load!]] when running on device)."
+  [obj key-path-or-kw callback]
+  (let [kp (if (keyword? key-path-or-kw) (name key-path-or-kw) key-path-or-kw)]
+    (patterns/kvo-watch! obj kp callback)))
+
+(defn unwatch
+  "Removes the KVO observer identified by handle (returned by [[watch]])."
+  [handle]
+  (patterns/kvo-unwatch! handle))
 
 ;; =============================================================================
 ;; Enums

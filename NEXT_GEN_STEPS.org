@@ -171,7 +171,7 @@ Gate: recorded call sequence matches the hand-written test exactly.
 Results: 8 tests, 18 assertions (patterns); 95 total, 387 assertions, 0 failures.
 Key insight: protocol methods require annotation in naming/transform-spec (:protocols update).
 
-** TODO 0.7 Patterns — KVO + completion handlers
+** DONE 0.7 Patterns — KVO + completion handlers
 
 Add ~:kvo~ and ~:completion-handler~ patterns.
 
@@ -183,6 +183,10 @@ Completion handlers: engine creates block via ~grease.ios.blocks~ that
 delivers to a returned ~promise~. User ~deref~s with timeout.
 
 Gate: mock-bridge tests pass for both patterns.
+
+Results: 11 new tests (KVO: 6, completion-handler: 5); 106 total, 408 assertions, 0 failures.
+Key files: patterns.clj (init!, kvo-watch!, kvo-unwatch!, reset-state!, :completion-handler wrap-arg*),
+api.clj (watch, unwatch), mock_bridge.clj (block mocks + invoke-block!).
 
 * Phase 1 — Foundation.edn (Step 8): First real-device validation
 

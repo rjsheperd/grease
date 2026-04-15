@@ -132,3 +132,142 @@
       (is (= :delegate (:pattern (first (:args m)))))
       (is (= "CLLocationManagerDelegate"
              (:protocol (first (:args m))))))))
+
+;; =============================================================================
+;; KVO — init!, kvo-watch!, kvo-unwatch!
+;; =============================================================================
+
+(defn- reset-and-init!
+  "Resets KVO state and calls init! with create-delegate-class! mocked."
+  []
+  (patterns/reset-state!)
+  (patterns/init!))
+
+(def ^:private mock-kvo-class {:class-name "GrseKVOObserver" :mocked true})
+
+(deftest kvo-init-creates-class-test
+  (testing "init! creates GrseKVOObserver class exactly once"
+    (let [call-count (atom 0)]
+      (with-redefs [patterns/create-delegate-class!
+                    (fn [class-name _ _]
+                      (swap! call-count inc)
+                      (assoc mock-kvo-class :class-name class-name))]
+        (mock/with-mock
+          (patterns/reset-state!)
+          (patterns/init!)
+          (is (= 1 @call-count))
+          ;; Second call is a no-op
+          (patterns/init!)
+          (is (= 1 @call-count)))))))
+
+(deftest kvo-init-class-name-test
+  (testing "init! registers class named GrseKVOObserver"
+    (let [captured-name (atom nil)]
+      (with-redefs [patterns/create-delegate-class!
+                    (fn [class-name _ _]
+                      (reset! captured-name class-name)
+                      mock-kvo-class)]
+        (mock/with-mock
+          (patterns/reset-state!)
+          (patterns/init!)
+          (is (= "GrseKVOObserver" @captured-name)))))))
+
+(deftest kvo-watch-dispatches-add-observer-test
+  (testing "kvo-watch! calls addObserver:forKeyPath:options:context:"
+    (with-redefs [patterns/create-delegate-class! (fn [_ _ _] mock-kvo-class)]
+      (mock/with-mock
+        (reset-and-init!)
+        (let [mgr    (api/wrap "CLLocationManager" {:address 0xABCD})
+              handle (patterns/kvo-watch! mgr "accuracy" (fn [_] nil))]
+          (is (map? handle))
+          (is (= "accuracy" (:key-path handle)))
+          (is (some? (:observer handle)))
+          (is (some? (:context handle)))
+          (is (some #(= "addObserver:forKeyPath:options:context:" (:sel %))
+                    (mock/calls))))))))
+
+(deftest kvo-watch-returns-unique-contexts-test
+  (testing "each kvo-watch! call gets a distinct context"
+    (with-redefs [patterns/create-delegate-class! (fn [_ _ _] mock-kvo-class)]
+      (mock/with-mock
+        (reset-and-init!)
+        (let [mgr (api/wrap "CLLocationManager" {:address 0xABCD})
+              h1  (patterns/kvo-watch! mgr "accuracy" (fn [_] nil))
+              h2  (patterns/kvo-watch! mgr "status" (fn [_] nil))]
+          (is (not= (:context h1) (:context h2))))))))
+
+(deftest kvo-unwatch-dispatches-remove-observer-test
+  (testing "kvo-unwatch! calls removeObserver:forKeyPath:context:"
+    (with-redefs [patterns/create-delegate-class! (fn [_ _ _] mock-kvo-class)]
+      (mock/with-mock
+        (reset-and-init!)
+        (let [mgr    (api/wrap "CLLocationManager" {:address 0xABCD})
+              handle (patterns/kvo-watch! mgr "accuracy" (fn [_] nil))
+              _      (patterns/kvo-unwatch! handle)]
+          (is (some #(= "removeObserver:forKeyPath:context:" (:sel %))
+                    (mock/calls))))))))
+
+(deftest api-watch-unwatch-test
+  (testing "api/watch and api/unwatch delegate to patterns/kvo-watch! and kvo-unwatch!"
+    (with-redefs [patterns/create-delegate-class! (fn [_ _ _] mock-kvo-class)]
+      (mock/with-mock
+        (reset-and-init!)
+        (let [mgr    (api/wrap "CLLocationManager" {:address 0xABCD})
+              handle (api/watch mgr :accuracy (fn [_] nil))]
+          ;; watch uses keyword -> string conversion
+          (is (= "accuracy" (:key-path handle)))
+          (api/unwatch handle)
+          (is (some #(= "removeObserver:forKeyPath:context:" (:sel %))
+                    (mock/calls))))))))
+
+;; =============================================================================
+;; Completion handler — :completion-handler pattern
+;; =============================================================================
+
+(deftest completion-handler-void-block-test
+  (testing "wrap-arg with :completion-handler :block-type :void creates void block"
+    (mock/with-mock
+      (let [spec {:name "handler" :type "id"
+                  :pattern :completion-handler :block-type :void}
+            cb   (fn [] :done)
+            blk  (patterns/wrap-arg spec cb)]
+        (is (= :void (:block-type blk)))
+        (is (fn? (:fn blk)))
+        (is (= 1 (count (mock/captured-blocks))))))))
+
+(deftest completion-handler-bool-error-block-test
+  (testing "wrap-arg with :completion-handler :block-type :bool-error creates bool-error block"
+    (mock/with-mock
+      (let [spec {:name "handler" :type "id"
+                  :pattern :completion-handler :block-type :bool-error}
+            cb   (fn [_ _] :done)
+            blk  (patterns/wrap-arg spec cb)]
+        (is (= :bool-error (:block-type blk)))
+        (is (= 1 (count (mock/captured-blocks))))))))
+
+(deftest completion-handler-data-block-test
+  (testing "wrap-arg with :completion-handler :block-type :data creates data block"
+    (mock/with-mock
+      (let [spec {:name "handler" :type "id"
+                  :pattern :completion-handler :block-type :data}
+            cb   (fn [_ _ _] :done)
+            blk  (patterns/wrap-arg spec cb)]
+        (is (= :data (:block-type blk)))
+        (is (= 1 (count (mock/captured-blocks))))))))
+
+(deftest completion-handler-default-void-test
+  (testing "wrap-arg :completion-handler defaults to :void when :block-type absent"
+    (mock/with-mock
+      (let [spec {:name "handler" :type "id" :pattern :completion-handler}
+            blk  (patterns/wrap-arg spec (fn [] nil))]
+        (is (= :void (:block-type blk)))))))
+
+(deftest invoke-block-helper-test
+  (testing "invoke-block! calls the captured block fn"
+    (mock/with-mock
+      (let [result (atom nil)
+            spec   {:name "handler" :type "id"
+                    :pattern :completion-handler :block-type :bool-error}
+            _blk   (patterns/wrap-arg spec (fn [ok _err] (reset! result ok)))]
+        (mock/invoke-block! (first (mock/captured-blocks)) 1 nil)
+        (is (= 1 @result))))))
