@@ -1,0 +1,136 @@
+;; CoreBluetooth framework spec — hand-written oracle.
+;;
+;; Reference implementation: src/grease/ios/bluetooth.clj
+;; Classes covered: CBCentralManager, CBPeripheral
+;; Protocols: CBCentralManagerDelegate
+;; Enums: CBManagerState
+;;
+;; CBCentralManager must be created and used on the main thread.
+;; Pass (grease.ios.foundation/main-queue) as the queue arg for initWithDelegate:queue:.
+
+{:framework "CoreBluetooth"
+ :doc-url   "https://developer.apple.com/documentation/corebluetooth"
+
+ :classes
+ [{:name         "CBCentralManager"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "alloc"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :doc      "Allocates a CBCentralManager — call initWithDelegate:queue: next"}
+    {:selector "initWithDelegate:queue:"
+     :encoding "@@:@@"
+     :args     [{:name     "delegate"
+                 :type     "id"
+                 :pattern  :delegate
+                 :protocol "CBCentralManagerDelegate"
+                 :nullable true}
+                {:name     "queue"
+                 :type     "id"
+                 :nullable true
+                 :doc      "Dispatch queue; pass (foundation/main-queue) or nil for main"}]
+     :return   "id"
+     :main-thread? true}]
+   :methods
+   [{:selector "state"
+     :encoding "q@:"
+     :args     []
+     :return   "NSInteger"
+     :doc      "Returns CBManagerState raw integer — use api/enum to decode"}
+    {:selector "scanForPeripheralsWithServices:options:"
+     :encoding "v@:@@"
+     :args     [{:name "serviceUUIDs" :type "id" :nullable true
+                 :doc  "NSArray of CBUUID or nil for all peripherals"}
+                {:name "options"      :type "id" :nullable true}]
+     :return   "void"
+     :main-thread? true}
+    {:selector "stopScan"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "connectPeripheral:options:"
+     :encoding "v@:@@"
+     :args     [{:name "peripheral" :type "id" :nullable false}
+                {:name "options"    :type "id" :nullable true}]
+     :return   "void"
+     :main-thread? true}
+    {:selector "cancelPeripheralConnection:"
+     :encoding "v@:@"
+     :args     [{:name "peripheral" :type "id" :nullable false}]
+     :return   "void"
+     :main-thread? true}]
+   :properties []}
+
+  {:name       "CBPeripheral"
+   :superclass "NSObject"
+   :init       []
+   :methods
+   [{:selector "name"
+     :encoding "@@:"
+     :args     []
+     :return   "NSString"
+     :doc      "Peripheral's advertised name, or nil"}
+    {:selector "identifier"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :doc      "Returns NSUUID pointer"}
+    {:selector "state"
+     :encoding "q@:"
+     :args     []
+     :return   "NSInteger"
+     :doc      "Returns CBPeripheralState raw integer"}
+    {:selector "services"
+     :encoding "@@:"
+     :args     []
+     :return   "NSArray"
+     :doc      "Returns nil until discoverServices: is called"}
+    {:selector "discoverServices:"
+     :encoding "v@:@"
+     :args     [{:name "serviceUUIDs" :type "id" :nullable true}]
+     :return   "void"}]
+   :properties []}]
+
+ :protocols
+ [{:name    "CBCentralManagerDelegate"
+   :methods
+   [{:selector "centralManagerDidUpdateState:"
+     :encoding "v@:@"
+     :args     [{:name "central" :type "id"}]}
+    {:selector "centralManager:didDiscoverPeripheral:advertisementData:RSSI:"
+     :encoding "v@:@@@q"
+     :args     [{:name "central"           :type "id"}
+                {:name "peripheral"        :type "id"}
+                {:name "advertisementData" :type "id"}
+                {:name "RSSI"             :type "id"
+                 :doc  "NSNumber — cast via nsnumber->long for dBm value"}]}
+    {:selector "centralManager:didConnectPeripheral:"
+     :encoding "v@:@@"
+     :args     [{:name "central"    :type "id"}
+                {:name "peripheral" :type "id"}]}
+    {:selector "centralManager:didFailToConnectPeripheral:error:"
+     :encoding "v@:@@@"
+     :args     [{:name "central"    :type "id"}
+                {:name "peripheral" :type "id"}
+                {:name "error"      :type "id"}]}
+    {:selector "centralManager:didDisconnectPeripheral:error:"
+     :encoding "v@:@@@"
+     :args     [{:name "central"    :type "id"}
+                {:name "peripheral" :type "id"}
+                {:name "error"      :type "id"}]}]}]
+
+ :enums
+ [{:name   "CBManagerState"
+   :values
+   [{:name "CBManagerStateUnknown"      :raw 0}
+    {:name "CBManagerStateResetting"    :raw 1}
+    {:name "CBManagerStateUnsupported"  :raw 2}
+    {:name "CBManagerStateUnauthorized" :raw 3}
+    {:name "CBManagerStatePoweredOff"   :raw 4}
+    {:name "CBManagerStatePoweredOn"    :raw 5}]}]
+
+ :constants []}

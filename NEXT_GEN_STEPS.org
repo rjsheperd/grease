@@ -342,7 +342,7 @@ Key methods (message-based, no structs):
 Oracle: ~src/grease/ios/bluetooth.clj~
 Spec: ~resources/grease/api-specs/CoreBluetooth.edn~
 
-** TODO 5.1 Write CoreBluetooth.edn
+** DONE 5.1 Write CoreBluetooth.edn
 
 Classes: CBCentralManager, CBPeripheral, CBService, CBCharacteristic.
 Protocol: CBCentralManagerDelegate, CBPeripheralDelegate.
