@@ -1,0 +1,112 @@
+;; Type bridge — maps ObjC type names to encoding chars and Clojure coercers.
+;;
+;; :encoding   — single-char ObjC type encoding used in msg-send arg lists
+;; :clj        — Clojure value kind (:string :number :seq :map :boolean :long :double :nil :pointer)
+;; :coerce-in  — symbol of fn to apply to Clojure values before passing to msg-send
+;; :coerce-out — symbol of fn to apply to msg-send return values before returning to Clojure
+;;
+;; Symbols are resolved via requiring-resolve at load time and cached.
+;; Class types (AVPlayer, CBPeripheral) are auto-registered with opaque-pointer
+;; semantics when their framework spec loads — see grease.ios.types/register-class!
+
+{"NSString"
+ {:encoding "@"
+  :clj :string
+  :coerce-in  grease.ios.foundation/->nsstring
+  :coerce-out grease.ios.foundation/nsstring->str}
+
+ "NSMutableString"
+ {:encoding "@"
+  :clj :string
+  :coerce-in  grease.ios.foundation/->nsstring
+  :coerce-out grease.ios.foundation/nsstring->str}
+
+ "NSNumber"
+ {:encoding "@"
+  :clj :number
+  :coerce-in  grease.ios.foundation/->nsnumber-long
+  :coerce-out grease.ios.foundation/nsnumber->long}
+
+ "NSArray"
+ {:encoding "@"
+  :clj :seq
+  :coerce-in  grease.ios.foundation/->nsarray
+  :coerce-out grease.ios.foundation/nsarray->vec}
+
+ "NSMutableArray"
+ {:encoding "@"
+  :clj :seq
+  :coerce-in  grease.ios.foundation/->nsarray
+  :coerce-out grease.ios.foundation/nsarray->vec}
+
+ "NSDictionary"
+ {:encoding "@"
+  :clj :map
+  :coerce-in  grease.ios.foundation/->nsdict
+  :coerce-out grease.ios.foundation/nsdict->map}
+
+ "NSMutableDictionary"
+ {:encoding "@"
+  :clj :map
+  :coerce-in  grease.ios.foundation/->nsdict
+  :coerce-out grease.ios.foundation/nsdict->map}
+
+ "NSURL"
+ {:encoding "@"
+  :clj :string
+  :coerce-in  grease.ios.foundation/string->nsurl
+  :coerce-out grease.ios.foundation/nsurl->string}
+
+ "NSError"
+ {:encoding "@"
+  :clj :map
+  :coerce-in  clojure.core/identity
+  :coerce-out grease.ios.foundation/nserror->map}
+
+ "BOOL"
+ {:encoding "B"
+  :clj :boolean
+  :coerce-in  grease.ios.types/bool->int
+  :coerce-out grease.ios.types/int->bool}
+
+ "NSInteger"
+ {:encoding "q"
+  :clj :long
+  :coerce-in  clojure.core/long
+  :coerce-out clojure.core/identity}
+
+ "NSUInteger"
+ {:encoding "Q"
+  :clj :long
+  :coerce-in  clojure.core/long
+  :coerce-out clojure.core/identity}
+
+ "Float"
+ {:encoding "f"
+  :clj :double
+  :coerce-in  clojure.core/double
+  :coerce-out clojure.core/identity}
+
+ "Double"
+ {:encoding "d"
+  :clj :double
+  :coerce-in  clojure.core/double
+  :coerce-out clojure.core/identity}
+
+ "void"
+ {:encoding "v"
+  :clj :nil
+  :coerce-in  clojure.core/identity
+  :coerce-out clojure.core/identity}
+
+ "id"
+ {:encoding "@"
+  :clj :pointer
+  :coerce-in  clojure.core/identity
+  :coerce-out clojure.core/identity}
+
+ "SEL"
+ {:encoding ":"
+  :clj :pointer
+  :coerce-in  clojure.core/identity
+  :coerce-out clojure.core/identity}}

@@ -40,7 +40,7 @@ Uses ~with-redefs~ on ~objc-rt/msg-send~, ~grease/get-objc-class~,
 
 Gate: ~(api/call fake-obj :play)~ records ~["AVPlayer" "play" :void]~.
 
-** TODO 0.2 Type bridge — ~resources/grease/types.edn~ + ~grease.ios.types~
+** DONE 0.2 Type bridge — ~resources/grease/types.edn~ + ~grease.ios.types~
 
 Create ~resources/grease/types.edn~ with entries from §3.3 of the arch doc:
 NSString, NSNumber, NSArray, NSDictionary, NSURL, BOOL, NSInteger,

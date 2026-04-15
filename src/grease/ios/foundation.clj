@@ -137,8 +137,21 @@
   (->nsdict (into {} (map (fn [[k v]] [(->nsstring k) (->nsstring v)]) m))))
 
 ;; =============================================================================
-;; NSError
+;; NSURL
 ;; =============================================================================
+
+(defn string->nsurl
+  "Returns an NSURL for the Clojure string url-string."
+  [url-string]
+  (msg-send* :pointer
+             (grease/get-objc-class "NSURL")
+             "URLWithString:" :pointer
+             (->nsstring url-string)))
+
+(defn nsurl->string
+  "Returns the absolute string of an NSURL pointer as a Clojure string."
+  [url]
+  (nsstring->str (msg-send* :pointer url "absoluteString")))
 
 ;; =============================================================================
 ;; Null pointer helpers
