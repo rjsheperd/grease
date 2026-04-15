@@ -15,7 +15,7 @@ See ~NEXT_GEN_ARCH.md~ for the full spec.  This file is the task board.
 All engine namespaces are testable in plain JVM via the mock bridge.
 Do not run on device until Step 8.
 
-** TODO 0.1 Mock bridge for testing
+** DONE 0.1 Mock bridge for testing
 
 Create ~test/grease/ios/mock_bridge.clj~.
 Records every ~msg-send~ call into an atom; returns canned responses.
