@@ -1,0 +1,496 @@
+#+TITLE: Next Gen — Execution Plan
+#+DATE: 2026-04-14
+#+OPTIONS: toc:2 num:nil
+#+TODO: TODO IN-PROGRESS | DONE CANCELLED
+
+The goal: replace per-framework hand-written ~.clj~ wrappers with a generic
+data-driven engine.  Drop an EDN file in ~resources/grease/api-specs/~; the
+engine handles the rest.  The hand-written files are *oracles* — validated
+reference implementations that the engine must match exactly.
+
+See ~NEXT_GEN_ARCH.md~ for the full spec.  This file is the task board.
+
+* Phase 0 — Engine (Steps 1–7): JVM-only, zero iOS hardware required
+
+All engine namespaces are testable in plain JVM via the mock bridge.
+Do not run on device until Step 8.
+
+** TODO 0.1 Mock bridge for testing
+
+Create ~test/grease/ios/mock_bridge.clj~.
+Records every ~msg-send~ call into an atom; returns canned responses.
+Uses ~with-redefs~ on ~objc-rt/msg-send~, ~grease/get-objc-class~,
+~grease/objc-new~.
+
+#+begin_src clojure
+;; Mock bridge API
+(def calls (atom []))
+
+(defn mock-msg-send [ret-type obj sel & args]
+  (swap! calls conj {:ret ret-type :obj obj :sel sel :args args})
+  (get @responses sel nil))
+
+(defmacro with-mock [& body]
+  `(with-redefs [grease.ios.objc/msg-send mock-msg-send
+                 com.phronemophobic.grease/get-objc-class (fn [n] {:cls n})
+                 com.phronemophobic.grease/objc-new (fn [cls] {:inst cls})]
+     (reset! calls [])
+     ~@body))
+#+end_src
+
+Gate: ~(api/call fake-obj :play)~ records ~["AVPlayer" "play" :void]~.
+
+** TODO 0.2 Type bridge — ~resources/grease/types.edn~ + ~grease.ios.types~
+
+Create ~resources/grease/types.edn~ with entries from §3.3 of the arch doc:
+NSString, NSNumber, NSArray, NSDictionary, NSURL, BOOL, NSInteger,
+Float, Double, void, id.
+
+~:coerce-in~ / ~:coerce-out~ values are symbols resolved via
+~requiring-resolve~ at load time, cached in atoms.
+
+Key behaviors:
+- ~nil~ for any ~:pointer~ type → ~(f/null-ptr)~
+- ~(types/coerce-in "NSString" "hello")~ returns same value as ~(f/->nsstring "hello")~
+
+#+begin_src clojure
+;; grease/ios/types.clj public API
+(defn coerce-in  [type-name value] ...)
+(defn coerce-out [type-name value] ...)
+(defn register-class! [class-name] ...)
+(defn encoding-for [type-name] ...)
+#+end_src
+
+Gate: ~test/grease/ios/types_test.clj~ — every entry round-trips;
+all coercer symbols resolve; ~(types/encoding-for "NSString")~ → ~"@"~.
+
+** TODO 0.3 Naming rules — ~resources/grease/naming.edn~ + ~grease.ios.naming~
+
+Create ~resources/grease/naming.edn~ with rules from §3.2.
+Tests auto-derived from ~:examples~ — every example pair becomes an
+assertion.
+
+Transforms to implement (as multimethods):
+- ~:strip+question~   — ~"isPlaying"~ → ~"playing?"~
+- ~:wrap-set-bang~    — ~"volume"~ → ~"set-volume!"~
+- ~:camel->kebab~     — ~"startRunning"~ → ~"start-running"~
+- ~:camel->kebab-keyword~ — ~"readyToPlay"~ → ~:ready-to-play~
+- ~:strip-framework-prefix~ — ~"AVPlayer"~ → ~"player"~
+
+Colon-containing selectors flattened first:
+~"setObject:forKey:"~ → ~setObject-forKey-~ → ~"set-object-for-key"~
+
+#+begin_src clojure
+;; grease/ios/naming.clj public API
+(defn ->clj  [scope objc-name] ...)  ; string|keyword
+(defn ->objc [scope clj-name]  ...)  ; string (selector)
+(defn transform-spec [spec] ...)     ; annotates spec with ::clj-name + reverse index
+#+end_src
+
+Gate: every ~:examples~ pair passes ~->clj~ and ~->objc~ round-trip.
+
+** TODO 0.4 Spec loader — ~Foundation.edn~ + ~grease.ios.spec~ + ~grease.ios.registry~
+
+Hand-write ~resources/grease/api-specs/Foundation.edn~ covering exactly the
+classes in the oracle ~grease.ios.foundation~:
+
+Classes: NSString, NSNumber, NSArray, NSMutableArray, NSDictionary,
+NSMutableDictionary, NSError.
+
+Implement ~grease.ios.spec~ (loader + validator) and ~grease.ios.registry~
+(three atoms: spec-registry, class-index, retention-table).
+
+#+begin_src clojure
+;; grease/ios/spec.clj
+(defn load-all  [] ...)            ; -> registry map
+(defn load-one  [path] ...)        ; -> single framework map, validated
+(defn validate  [spec] ...)        ; throws ex-info on failure
+
+;; grease/ios/registry.clj
+(defn class-spec   [class-name] ...)
+(defn method-spec  [class-name selector] ...)
+(defn enum-keyword-for [enum-name raw] ...)
+(defn retain!  [key ptr] ...)
+(defn release! [key] ...)
+#+end_src
+
+Gate: ~(spec/load-all)~ returns Foundation entry;
+~(registry/class-spec "NSString")~ returns expected map.
+
+** TODO 0.5 Invoke + API — ~grease.ios.invoke~ + ~grease.ios.api~
+
+Implement the dispatch core.  With mock bridge, verify the full pipeline.
+
+Algorithm (from §4.6):
+1. Resolve class from ~repl/class-name-of~
+2. Look up method spec (keyword → clj-name index, string → raw selector)
+3. Parse ~:encoding~ → return-type + per-arg encoding chars
+4. Walk args: route patterns → ~types/coerce-in~
+5. Build flat ~[type value ...]~ list for ~objc-rt/msg-send~
+6. Wrap in ~repl/on-main~ if ~:main-thread? true~
+7. Apply ~types/coerce-out~ or enum decode to result
+8. Return
+
+#+begin_src clojure
+;; grease/ios/api.clj — user-facing API
+(ios/make   :av-player {:url "https://..."})  ; -> instance pointer
+(ios/call   player :play)                     ; -> nil
+(ios/get-prop player :status)                 ; -> :ready-to-play
+(ios/set-prop! player :volume 0.5)
+(ios/watch  player :status (fn [old new] ...)) ; -> handle
+(ios/unwatch handle)
+(ios/enum   :av-player-status :ready-to-play)  ; -> 1
+(ios/load!)   ; load all specs
+(ios/reload!) ; reload from disk
+#+end_src
+
+Gate (oracle test): for every function in ~grease.ios.foundation~, assert
+the engine-emitted ~msg-send~ sequence is byte-identical to what the
+hand-written wrapper produces.
+
+** TODO 0.6 Patterns — delegates (~grease.ios.patterns~)
+
+Implement ~wrap-arg~ for ~:delegate~ pattern:
+- User passes ~{:keyword fn}~ map
+- Engine builds ObjC class via ~objc-rt/defclass!~
+- Idempotent: same map → same delegate (hash-keyed retention)
+
+Add CoreLocation snippet to ~CoreLocation.edn~ with ~CLLocationManager~.
+
+Verify: ~(ios/make :location-manager)~ + ~(ios/call mgr :set-delegate {...})~
+produces same ~defclass!~ + ~msg-send~ sequence as ~dev/test_location.clj~.
+
+Gate: recorded call sequence matches the hand-written test exactly.
+
+** TODO 0.7 Patterns — KVO + completion handlers
+
+Add ~:kvo~ and ~:completion-handler~ patterns.
+
+KVO: internal observer class created at engine startup via ~(patterns/init!)~.
+Notifications route to callbacks registered by ~(api/watch obj :prop on-change-fn)~.
+Returns opaque handle; ~(api/unwatch handle)~ deregisters via KVO removeObserver:.
+
+Completion handlers: engine creates block via ~grease.ios.blocks~ that
+delivers to a returned ~promise~. User ~deref~s with timeout.
+
+Gate: mock-bridge tests pass for both patterns.
+
+* Phase 1 — Foundation.edn (Step 8): First real-device validation
+
+Oracle: ~src/grease/ios/foundation.clj~
+Spec: ~resources/grease/api-specs/Foundation.edn~
+
+** TODO 1.1 Complete Foundation.edn spec
+
+Cover all public functions in ~grease.ios.foundation~:
+
+| Clojure fn | ObjC selector | Class |
+|------------+---------------+-------|
+| ~->nsstring~ | ~stringWithUTF8String:~ | NSString |
+| ~nsstring->str~ | ~UTF8String~ | NSString |
+| ~->nsarray~ | ~array~ + ~addObject:~ | NSMutableArray |
+| ~nsarray->vec~ | ~count~ + ~objectAtIndex:~ | NSArray |
+| ~->nsdict~ | ~dictionary~ + ~setObject:forKey:~ | NSMutableDictionary |
+| ~nsdict->map~ | ~allKeys~ + ~objectForKey:~ | NSDictionary |
+| ~->nsnumber-long~ | ~numberWithLongLong:~ | NSNumber |
+| ~nsnumber->long~ | ~longLongValue~ | NSNumber |
+| ~nsnumber->double~ | ~doubleValue~ | NSNumber |
+| ~nserror->map~ | ~domain~ + ~code~ + ~localizedDescription~ | NSError |
+
+** TODO 1.2 On-device validation via REPL
+
+#+begin_src bash
+scripts/repl-eval '
+(require (quote [grease.ios.api :as ios]))
+(ios/load!)
+;; NSString round-trip
+(let [s (ios/make :string "hello world")]
+  (ios/call s :utf8-string))
+;; => "hello world"
+'
+#+end_src
+
+Gate: every Foundation operation via engine matches oracle output.
+
+* Phase 2 — CoreLocation.edn (Step 9): Delegates on real hardware
+
+Oracle: ~dev/test_location.clj~
+Spec: ~resources/grease/api-specs/CoreLocation.edn~
+
+** TODO 2.1 Write CoreLocation.edn
+
+Classes: CLLocationManager, CLLocation.
+Protocol: CLLocationManagerDelegate.
+
+Key methods:
+- ~requestWhenInUseAuthorization~ — ~"v@:"~, main-thread
+- ~startUpdatingLocation~ — ~"v@:"~, main-thread
+- ~setDelegate:~ — ~"v@:@"~, delegate pattern
+- ~coordinate~ — struct (UNSUPPORTED v1, mark ~:unsupported true~)
+- ~horizontalAccuracy~ — ~"d@:"~, double
+
+** TODO 2.2 Delegate pattern integration test
+
+#+begin_src clojure
+(def last-location (atom nil))
+
+(ios/make :location-manager
+          {:delegate {:on-update-locations
+                      (fn [_self _cmd _mgr locs]
+                        (reset! last-location locs))}})
+
+(ios/call mgr :request-when-in-use-authorization)
+(ios/call mgr :start-updating-location)
+
+(deref (promise) 20000 nil)  ; wait up to 20s
+@last-location  ; => non-nil CLLocation pointer
+#+end_src
+
+Gate: location test passes end-to-end; ARC retention holds delegate.
+
+* Phase 3 — AVFoundation.edn
+
+Oracle: ~src/grease/ios/camera.clj~
+Spec: ~resources/grease/api-specs/AVFoundation.edn~
+
+** TODO 3.1 Write AVFoundation.edn (camera subset first)
+
+Classes: AVCaptureSession, AVCaptureDevice, AVCaptureDeviceInput,
+AVCaptureVideoDataOutput, AVCaptureConnection.
+Protocol: AVCaptureVideoDataOutputSampleBufferDelegate.
+
+Key methods (camera path):
+- ~AVCaptureDevice defaultDeviceWithMediaType:~ — class method
+- ~AVCaptureDeviceInput deviceInputWithDevice:error:~ — class method, completion
+- ~AVCaptureSession addInput:~ / ~addOutput:~
+- ~AVCaptureVideoDataOutput setSampleBufferDelegate:queue:~ — delegate
+- ~AVCaptureSession startRunning~ / ~stopRunning~ — main-thread
+- ~AVCaptureSession isRunning~ — ~"B@:"~, returns BOOL
+
+** TODO 3.2 AVFoundation REPL test
+
+#+begin_src clojure
+(def frame-count (atom 0))
+
+(let [session (ios/make :capture-session)
+      camera  (ios/call :capture-device :default-device-with-media-type "vide")
+      input   (ios/call :capture-device-input :device-input-with-device:error: camera nil)
+      output  (ios/make :capture-video-data-output)
+      d       {:on-capture-output:did-output-sample-buffer:from-connection:
+               (fn [_self _cmd _out buf _conn]
+                 (swap! frame-count inc))}]
+  (ios/call session :begin-configuration)
+  (ios/call session :add-input input)
+  (ios/call session :add-output output)
+  (ios/call output :set-sample-buffer-delegate:queue: d (grease.ios.foundation/main-queue))
+  (ios/call session :commit-configuration)
+  (ios/call session :start-running)
+  (deref (promise) 3000 nil)
+  @frame-count)
+;; => > 0
+#+end_src
+
+* Phase 4 — UIKit.edn
+
+Oracle: ~src/grease/ios/uikit.clj~
+Spec: ~resources/grease/api-specs/UIKit.edn~
+
+** TODO 4.1 Write UIKit.edn
+
+Note: UIKit structs (CGRect, CGPoint) are v1 UNSUPPORTED.
+Use the existing C shims (~grease_set_frame~, ~grease_get_frame_x~, etc.)
+via ~ffi/call~ — these are NOT ObjC messages and NOT in the EDN spec.
+The EDN covers only ObjC message-based APIs.
+
+Classes: UIApplication, UIWindow, UIView, UILabel, UIColor, UIFont.
+
+Key methods (message-based, no structs):
+- ~UIApplication sharedApplication~ — class method
+- ~UIApplication keyWindow~ — property, main-thread
+- ~UIView subviews~ — property, returns NSArray
+- ~UIView addSubview:~ — ~"v@:@"~
+- ~UIView removeFromSuperview~ — ~"v@:"~
+- ~UILabel text~ / ~setText:~ — property
+- ~UILabel setTextColor:~ / ~setFont:~ — method
+
+** TODO 4.2 UIKit REPL test
+
+#+begin_src clojure
+(ios/load!)
+(let [app   (ios/call :application :shared-application)
+      win   (ios/get-prop app :key-window)
+      root  (ios/get-prop win :root-view-controller)
+      view  (ios/get-prop root :view)
+      label (ios/make :label)]
+  (ios/call label :set-text "Hello from ios/api!")
+  (ios/call view :add-subview label)
+  (ios/get-prop label :text))
+;; => "Hello from ios/api!"
+#+end_src
+
+* Phase 5 — CoreBluetooth.edn
+
+Oracle: ~src/grease/ios/bluetooth.clj~
+Spec: ~resources/grease/api-specs/CoreBluetooth.edn~
+
+** TODO 5.1 Write CoreBluetooth.edn
+
+Classes: CBCentralManager, CBPeripheral, CBService, CBCharacteristic.
+Protocol: CBCentralManagerDelegate, CBPeripheralDelegate.
+
+Key methods:
+- ~CBCentralManager initWithDelegate:queue:~ — delegate + queue arg
+- ~CBCentralManager scanForPeripheralsWithServices:options:~ — nullable args
+- ~CBCentralManager stopScan~
+- ~CBCentralManager state~ — property, enum ~CBManagerState~
+
+Enum CBManagerState:
+#+begin_src clojure
+{:values [{:name "unknown"    :raw 0}
+           {:name "resetting"  :raw 1}
+           {:name "unsupported" :raw 2}
+           {:name "unauthorized" :raw 3}
+           {:name "powered-off"  :raw 4}
+           {:name "powered-on"   :raw 5}]}
+#+end_src
+
+** TODO 5.2 CoreBluetooth REPL test
+
+#+begin_src clojure
+(def bt-state (atom nil))
+
+(ios/make :central-manager
+          {:delegate {:on-central-manager-did-update-state:
+                      (fn [_self _cmd mgr]
+                        (reset! bt-state (ios/get-prop mgr :state)))}
+           :queue (grease.ios.foundation/main-queue)})
+
+(deref (promise) 2000 nil)
+@bt-state  ; => :powered-on (or :powered-off / :unauthorized)
+#+end_src
+
+* Phase 6 — Scraper (Steps 11–12): EDN from Apple docs JSON
+
+This is a separate effort — do not block Phase 1-5 on it.
+
+** TODO 6.1 Implement ~grease.scrape.apple-docs~
+
+Fetch ~https://developer.apple.com/tutorials/data/documentation/<framework>.json~
+Cache to ~.cache/apple-docs/~.
+Parse to EDN matching the §3.1 spec format.
+
+Key challenges:
+- Struct-returning methods → tag ~:unsupported true~
+- Deprecated symbols → tag ~:deprecated true~ + version
+- Multiple init signatures → list in ~:init~
+
+** TODO 6.2 Implement ~grease.scrape.normalize~
+
+Apply naming rules to scraped JSON → validated EDN.
+Every output EDN passes ~(spec/validate ...)~.
+Never hand-edit scraper output — fix the scraper.
+
+** TODO 6.3 Scrape the framework list
+
+| Framework | Key Classes | Notes |
+|-----------+--------------+-------|
+| Foundation | NSString, NSArray, NSDictionary | Start here |
+| UIKit | UIView, UIViewController, UILabel | Struct-heavy; partial |
+| AVFoundation | AVPlayer, AVCaptureSession | Camera + audio |
+| CoreLocation | CLLocationManager, CLLocation | GPS |
+| CoreBluetooth | CBCentralManager | BLE |
+| CoreData | NSManagedObjectContext | ORM |
+| MapKit | MKMapView, MKAnnotation | |
+| StoreKit | SKProduct, SKPaymentQueue | IAP |
+| UserNotifications | UNUserNotificationCenter | Push |
+| AuthenticationServices | ASWebAuthenticationSession | OAuth |
+| ARKit | ARSession, ARFrame | AR |
+| SensorKit | SRSensorReader | Biometrics |
+| CoreNFC | NFCNDEFReaderSession | NFC (entitlement) |
+| HealthKit | HKHealthStore | Entitlement |
+| HomeKit | HMHomeManager | Entitlement |
+| GameKit | GKLocalPlayer | Game Center |
+| EventKit | EKEventStore | Calendar |
+| Contacts | CNContactStore | Contacts |
+| Photos | PHPhotoLibrary | Photo access |
+| SafariServices | SFSafariViewController | In-app browser |
+| WebKit | WKWebView | Web content |
+| MessageUI | MFMailComposeViewController | Email (entitlement) |
+| CoreMotion | CMMotionManager | Gyro/accel |
+| CoreHaptics | CHHapticEngine | Haptic feedback |
+| CoreImage | CIFilter, CIContext | Image processing |
+| Vision | VNRequest | ML vision |
+| NaturalLanguage | NLTokenizer | NLP |
+| CreateML | N/A | On-device training |
+
+Gate per framework: EDN loads without validation errors; oracle test passes.
+
+* Phase 7 — Round-trip test suite (Step 13)
+
+** TODO 7.1 Write ~test/grease/ios/oracle_test.clj~
+
+For every loaded spec:
+- Every method has resolvable arg types
+- Every enum round-trips both ways (~:keyword~ ↔ raw int)
+- Every property has a coercer pair
+- Every spec-declared protocol is registerable
+
+This is the regression net for future scraper changes.
+
+#+begin_src bash
+clj -M:test test/grease/ios/oracle_test.clj
+# => 0 failures, N assertions
+#+end_src
+
+* Open Questions (from §9 of NEXT_GEN_ARCH.md)
+
+1. *Scope of v1*: engine + Foundation + CoreLocation only first, then scraper.
+   Recommendation accepted.
+
+2. *Struct support* (CGRect, CMTime): deferred to v2.
+   Mark struct-arg/return methods ~:unsupported true~ in v1.
+
+3. *~defframework!~ macro*: deferred.
+   ~(ios/call obj :method args)~ syntax is sufficient for v1.
+
+4. *Migration of existing wrappers*: keep forever as oracles.
+   Deprecate only after engine has been in real use for one release cycle.
+
+* Build Order (strict, test-gated)
+
+#+begin_src
+CRITICAL PATH:
+
+Phase 0 (Engine — pure JVM, no iOS hardware):
+  0.1 mock bridge → 0.2 types → 0.3 naming → 0.4 spec+registry
+  → 0.5 invoke+api → 0.6 delegate pattern → 0.7 KVO+completion
+
+[INSERT HERE: Phase 9.2 from NEXT_STEPS.org — resource hot-reload]
+  Rationale: Phase 0 is pure JVM (no build-bb-o dependency).
+  Hot-reload pays off ONLY during on-device iteration (Phases 1+).
+  Do it BEFORE the first on-device test, not before Phase 0.
+
+Phase 1 (Foundation on device):
+  1.1 Foundation.edn → 1.2 REPL validation
+
+Phase 2 (CoreLocation on device):
+  2.1 CoreLocation.edn → 2.2 location integration test
+
+Phase 3-5 (More frameworks):
+  3 AVFoundation → 4 UIKit → 5 CoreBluetooth
+
+Phase 6 (Scraper):
+  6.1 scraper → 6.2 normalizer → 6.3 all frameworks
+
+Phase 7 (Round-trip suite):
+  7.1 oracle_test.clj
+
+OFF THE CRITICAL PATH:
+- Phase 9.1 (sci/new-macro-var): blocked by circular dependency
+  (grease.ios.objc requires grease; can't require it back). Deferred.
+- Phase 9.3 (incremental GraalVM): not stable for iOS targets. Track only.
+- Phase 9.4 (automated tests): subsumed by NEXT_GEN oracle tests in Step 5.
+  Building a standalone harness before the engine exists is redundant.
+
+Each gate must pass before advancing.
+#+end_src
