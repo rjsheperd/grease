@@ -106,7 +106,7 @@
             (objc-rt/msg-send :pointer mgr
                               "initWithDelegate:queue:"
                               :pointer d
-                              :pointer nil))
+                              :pointer (f/main-queue)))
     (println "[BT] manager created, waiting for powered-on state...")
     @manager-atom))
 
@@ -124,5 +124,5 @@
   (when-let [mgr @manager-atom]
     (objc-rt/msg-send :void mgr
                       "scanForPeripheralsWithServices:options:"
-                      :pointer nil
-                      :pointer nil)))
+                      :pointer (f/null-ptr)
+                      :pointer (f/null-ptr))))

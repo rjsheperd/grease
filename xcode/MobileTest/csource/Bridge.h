@@ -51,6 +51,13 @@ void  grease_call_void_block(void *block);
 // for all methods registered on cls (direct methods only, not inherited).
 void *grease_class_method_names(void *cls);
 
+// Null pointer and main GCD queue shims.
+// clj-libffi's PToPointer protocol has no implementation for Clojure nil or
+// java.lang.Long, so passing nil/0 as a :pointer arg throws at runtime.
+// Use (f/null-ptr) for nil ObjC pointer args; (f/main-queue) for dispatch_queue_t.
+void *grease_null_ptr(void);
+void *grease_main_queue(void);
+
 // UIKit frame / geometry shims — avoids CGRect struct return via FFI.
 // All functions must be called on the main thread.
 void   grease_set_frame(void *view, double x, double y, double w, double h);

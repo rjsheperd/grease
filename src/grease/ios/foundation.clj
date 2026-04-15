@@ -12,10 +12,10 @@
   method that retains internally) to keep them alive beyond the current
   autorelease pool drain.
 
-  Null pointer caution: clj-libffi rejects `java.lang.Long` for `:pointer`
-  arguments. To pass a nil ObjC object, use an empty collection or the
-  `NSNull` singleton:
-    `(msg-send :pointer (get-class \"NSNull\") \"null\")`"
+  Null pointer caution: clj-libffi rejects `java.lang.Long` AND Clojure `nil`
+  for `:pointer` arguments (`PToPointer` protocol not implemented for either).
+  Use [[null-ptr]] for nil ObjC pointer args, and [[main-queue]] for a nil
+  dispatch_queue_t (which tells CB/CL managers to use the main queue)."
   (:require [com.phronemophobic.clj-libffi :as ffi]
             [com.phronemophobic.grease :as grease]
             [tech.v3.datatype.ffi :as dt-ffi]))
@@ -135,6 +135,33 @@
   "Returns an NSMutableDictionary from a Clojure map of string → string."
   [m]
   (->nsdict (into {} (map (fn [[k v]] [(->nsstring k) (->nsstring v)]) m))))
+
+;; =============================================================================
+;; NSError
+;; =============================================================================
+
+;; =============================================================================
+;; Null pointer helpers
+;; =============================================================================
+
+(defn null-ptr
+  "Returns a native null pointer usable with clj-libffi :pointer args.
+  Use wherever an ObjC API expects a nil/NULL pointer argument.
+
+  Example:
+    ;; Pass nil options to CBCentralManager
+    (msg-send :pointer mgr \"initWithDelegate:queue:options:\"
+              :pointer d :pointer (f/main-queue) :pointer (f/null-ptr))"
+  []
+  (ffi/call "grease_null_ptr" :pointer))
+
+(defn main-queue
+  "Returns the main GCD dispatch_queue_t pointer.
+  Pass as :pointer to any ObjC API that accepts a dispatch_queue_t.
+  Equivalent to passing nil (which means 'use main queue') but compatible
+  with clj-libffi's PToPointer protocol."
+  []
+  (ffi/call "grease_main_queue" :pointer))
 
 ;; =============================================================================
 ;; NSError

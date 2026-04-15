@@ -278,6 +278,18 @@ void grease_call_void_block(void *block) {
 }
 
 // =============================================================================
+// Null pointer and main GCD queue shims
+// =============================================================================
+
+void *grease_null_ptr(void) {
+    return NULL;
+}
+
+void *grease_main_queue(void) {
+    return (void *)dispatch_get_main_queue();
+}
+
+// =============================================================================
 // UIKit frame / geometry shims
 //
 // CGRect, CGPoint, and CGSize are C structs.  Returning structs through a
