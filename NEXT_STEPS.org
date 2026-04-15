@@ -281,52 +281,64 @@ must be unique per process — each re-eval creates ~MyDelegate_v1~, ~_v2~, etc.
 Loaded via ~sci/eval-string*~ in ~grease.clj~ startup alongside ~objc.clj~,
 ~foundation.clj~, and ~blocks.clj~. Available from nREPL without rebuild.
 
-* Phase 6 — Additional Delegate Frameworks
+* Phase 6 — Additional Delegate Frameworks [1/5]
 
 With ~defclass~ proven, every delegate-based framework follows the same
 three-step pattern: ~defclass~ → set delegate → ~msg-send~ to start.
 
-** TODO 6.1 CoreBluetooth
+** DONE 6.1 CoreBluetooth
+
+~src/grease/ios/bluetooth.clj~ — proven on-device via ~scripts/repl-eval~:
+- ~bt-state~ transitions from ~:unknown~ → ~:powered-on~
+- ~start-scanning!/scan!/stop-scanning!~ all work without crash
+- Critical fix: ~(f/null-ptr)~ / ~(f/main-queue)~ required because clj-libffi
+  rejects both ~nil~ and ~java.lang.Long~ for ~:pointer~ args. Added C shims
+  ~grease_null_ptr()~ and ~grease_main_queue()~ to Bridge.m; exposed as
+  [[grease.ios.foundation/null-ptr]] and [[grease.ios.foundation/main-queue]].
 
 #+begin_src clojure
-(defclass BTDelegate "NSObject"
-  "centralManagerDidUpdateState:" "v@:@"
-  (fn [_self _cmd mgr]
-    (println "BT state:" (msg-send :int64 mgr "state")))
-  "centralManager:didDiscoverPeripheral:advertisementData:RSSI:" "v@:@@@q"
-  (fn [_self _cmd _mgr peripheral adv rssi]
-    (println "Found:" (nsstring->str (msg-send :pointer peripheral "name"))
-             "RSSI:" rssi)))
+(require '[grease.ios.bluetooth :as bt])
+(require '[grease.ios.repl :refer [on-main]])
 
-(dispatch-main-async
-  (fn []
-    (let [cls (get-class "CBCentralManager")
-          d   (new-instance BTDelegate)
-          mgr (msg-send :pointer cls "alloc")]
-      (reset! held-bt-delegate d)
-      (reset! held-bt-manager
-        (msg-send :pointer mgr "initWithDelegate:queue:" :pointer d :pointer 0))
-      (msg-send :void @held-bt-manager "scanForPeripheralsWithServices:options:"
-                :pointer 0 :pointer 0))))
+(on-main (bt/start-scanning!))
+;; => bt-state transitions to :powered-on
+
+(on-main (bt/scan!))
+;; => peripherals atom accumulates {:name :rssi :ptr} maps
+
+@bt/peripherals  ;; => [{:name "..." :rssi -65 :ptr {...}} ...]
 #+end_src
 
-Note: ~CBCentralManager~ requires ~NSBluetoothAlwaysUsageDescription~ in
-Info.plist and Bluetooth entitlement in the provisioning profile.
+Note: ~NSBluetoothAlwaysUsageDescription~ already in Info.plist.
 
 ** TODO 6.2 AVFoundation / Camera
 
+~src/grease/ios/camera.clj~ — delegate + session setup:
+
 #+begin_src clojure
-(defclass VideoDelegate "NSObject"
-  "captureOutput:didOutputSampleBuffer:fromConnection:" "v@:@@@"
-  (fn [_self _cmd _output sample-buf _conn]
-    ;; CMSampleBufferRef is :pointer — pass to grease_sample_buffer_info C shim
-    (reset! last-frame sample-buf)))
+;; REPL test sequence:
+(require '[grease.ios.camera :as cam])
+(require '[grease.ios.repl :refer [on-main]])
+
+;; 1. Check authorization status (0=not-determined 1=restricted 2=denied 3=authorized)
+(scripts/repl-eval
+  "(cam/authorization-status)")
+
+;; 2. Request permission (triggers system dialog)
+(on-main (cam/request-authorization!
+          (fn [granted?] (println "Camera granted:" granted?))))
+
+;; 3. Start session and capture frames
+(on-main (cam/start-session!))
+;; => @cam/last-frame updates when frames arrive
+
+;; 4. Stop session
+(on-main (cam/stop-session!))
 #+end_src
 
-Requires ~NSCameraUsageDescription~ in Info.plist. The session setup
-(~AVCaptureSession~, ~AVCaptureVideoDataOutput~, dispatch queue) uses
-~msg-send~ throughout. Frame data extraction needs C shims for
-~CMSampleBufferGetImageBuffer~ + ~CVPixelBufferLockBaseAddress~.
+Requires ~NSCameraUsageDescription~ in Info.plist (add if missing).
+Frame pixel data needs C shims for ~CMSampleBufferGetImageBuffer~ +
+~CVPixelBufferLockBaseAddress~ to extract raw bytes.
 
 ** TODO 6.3 HealthKit
 

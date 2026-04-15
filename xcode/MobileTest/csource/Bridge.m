@@ -286,7 +286,7 @@ void *grease_null_ptr(void) {
 }
 
 void *grease_main_queue(void) {
-    return (void *)dispatch_get_main_queue();
+    return (__bridge void *)dispatch_get_main_queue();
 }
 
 // =============================================================================

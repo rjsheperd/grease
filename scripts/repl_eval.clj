@@ -20,11 +20,7 @@
           session (nrepl/client-session client)
           msgs    (nrepl/message session {:op "eval" :code code})]
       (doseq [msg msgs]
-        (when-let [v (:value msg)]
-          (println v))
-        (when-let [e (:err msg)]
-          (binding [*out* *err*]
-            (print e)))
-        (when-let [ex (:ex msg)]
-          (binding [*out* *err*]
-            (println "exception:" ex)))))))
+        (when-let [o (:out msg)]   (print o))
+        (when-let [v (:value msg)] (println v))
+        (when-let [e (:err msg)]   (binding [*out* *err*] (print e)))
+        (when-let [ex (:ex msg)]   (binding [*out* *err*] (println "exception:" ex)))))))
