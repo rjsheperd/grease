@@ -382,7 +382,7 @@ Enum CBManagerState:
 
 This is a separate effort — do not block Phase 1-5 on it.
 
-** TODO 6.1 Implement ~grease.scrape.apple-docs~
+** DONE 6.1 Implement ~grease.scrape.apple-docs~
 
 Fetch ~https://developer.apple.com/tutorials/data/documentation/<framework>.json~
 Cache to ~.cache/apple-docs/~.
@@ -392,6 +392,12 @@ Key challenges:
 - Struct-returning methods → tag ~:unsupported true~
 - Deprecated symbols → tag ~:deprecated true~ + version
 - Multiple init signatures → list in ~:init~
+
+Results: 16 new tests, 26 assertions (apple-docs); 166 total, 592 assertions, 0 failures.
+Key files: src/grease/scrape/apple_docs.clj, test/grease/scrape/apple_docs_test.clj.
+Fixture JSON at test/fixtures/apple-docs/ (CoreLocation framework + CLLocationManager class).
+Public API: fetch, framework-symbols, class-identifiers, class-doc, class-methods, fragment-text.
+*cache-dir* dynamic var enables fixture-based offline testing.
 
 ** TODO 6.2 Implement ~grease.scrape.normalize~
 

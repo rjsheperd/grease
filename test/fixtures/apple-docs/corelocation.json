@@ -1,0 +1,42 @@
+{
+  "metadata": {
+    "title": "Core Location",
+    "role": "collection"
+  },
+  "topicSections": [
+    {
+      "title": "Classes",
+      "identifiers": [
+        "doc://com.apple.documentation/documentation/corelocation/cllocationmanager",
+        "doc://com.apple.documentation/documentation/corelocation/cllocation"
+      ]
+    }
+  ],
+  "references": {
+    "doc://com.apple.documentation/documentation/corelocation/cllocationmanager": {
+      "title": "CLLocationManager",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "keyword", "text": "@interface"},
+        {"kind": "text",    "text": " "},
+        {"kind": "identifier", "text": "CLLocationManager"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/corelocation/cllocation": {
+      "title": "CLLocation",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "keyword",    "text": "@interface"},
+        {"kind": "text",       "text": " "},
+        {"kind": "identifier", "text": "CLLocation"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/corelocation": {
+      "title": "Core Location",
+      "role": "collection",
+      "kind": "article"
+    }
+  }
+}

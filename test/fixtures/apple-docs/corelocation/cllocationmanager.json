@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "title": "CLLocationManager",
+    "symbolKind": "cl",
+    "role": "symbol"
+  },
+  "topicSections": [
+    {
+      "title": "Requesting Authorization",
+      "identifiers": [
+        "doc://com.apple.documentation/documentation/corelocation/cllocationmanager/1617567-requestwheninuseauthorization"
+      ]
+    },
+    {
+      "title": "Starting and Stopping Location Services",
+      "identifiers": [
+        "doc://com.apple.documentation/documentation/corelocation/cllocationmanager/1423507-startupdatinglocation",
+        "doc://com.apple.documentation/documentation/corelocation/cllocationmanager/1617538-stopupdatinglocation"
+      ]
+    }
+  ],
+  "references": {
+    "doc://com.apple.documentation/documentation/corelocation/cllocationmanager/1617567-requestwheninuseauthorization": {
+      "title": "requestWhenInUseAuthorization",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "text",       "text": "- "},
+        {"kind": "identifier", "text": "requestWhenInUseAuthorization"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/corelocation/cllocationmanager/1423507-startupdatinglocation": {
+      "title": "startUpdatingLocation",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "text",       "text": "- "},
+        {"kind": "identifier", "text": "startUpdatingLocation"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/corelocation/cllocationmanager/1617538-stopupdatinglocation": {
+      "title": "stopUpdatingLocation",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "text",       "text": "- "},
+        {"kind": "identifier", "text": "stopUpdatingLocation"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/corelocation/cllocationmanager": {
+      "title": "CLLocationManager",
+      "role": "symbol",
+      "kind": "symbol",
+      "fragments": [
+        {"kind": "keyword",    "text": "@interface"},
+        {"kind": "text",       "text": " "},
+        {"kind": "identifier", "text": "CLLocationManager"}
+      ]
+    },
+    "doc://com.apple.documentation/documentation/corelocation": {
+      "title": "Core Location",
+      "role": "collection",
+      "kind": "article"
+    }
+  }
+}
