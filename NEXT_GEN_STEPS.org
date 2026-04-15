@@ -262,7 +262,7 @@ Gate: 112 total tests, 429 assertions, 0 failures.
 Oracle: ~src/grease/ios/camera.clj~
 Spec: ~resources/grease/api-specs/AVFoundation.edn~
 
-** TODO 3.1 Write AVFoundation.edn (camera subset first)
+** DONE 3.1 Write AVFoundation.edn (camera subset first)
 
 Classes: AVCaptureSession, AVCaptureDevice, AVCaptureDeviceInput,
 AVCaptureVideoDataOutput, AVCaptureConnection.

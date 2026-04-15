@@ -3,4 +3,5 @@
 ;; is the authoritative list.  The scraper updates it automatically.
 
 {:specs ["grease/api-specs/Foundation.edn"
-          "grease/api-specs/CoreLocation.edn"]}
+          "grease/api-specs/CoreLocation.edn"
+          "grease/api-specs/AVFoundation.edn"]}

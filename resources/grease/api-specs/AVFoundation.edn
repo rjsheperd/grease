@@ -1,0 +1,150 @@
+;; AVFoundation framework spec — hand-written oracle.
+;;
+;; Reference implementation: src/grease/ios/camera.clj
+;; Classes covered: AVCaptureDevice, AVCaptureDeviceInput,
+;;                  AVCaptureSession, AVCaptureVideoDataOutput
+;; Protocols: AVCaptureVideoDataOutputSampleBufferDelegate
+;; Enums: AVAuthorizationStatus
+;;
+;; Camera operations run on the main thread (except authorization requests).
+;; AVCaptureVideoDataOutput setSampleBufferDelegate:queue: takes a
+;; dispatch_queue_t pointer for the second arg (passed as type "id").
+
+{:framework "AVFoundation"
+ :doc-url   "https://developer.apple.com/documentation/avfoundation"
+
+ :classes
+ [{:name        "AVCaptureDevice"
+   :superclass  "NSObject"
+   :init
+   [{:selector "authorizationStatusForMediaType:"
+     :encoding "q@:@"
+     :args     [{:name "mediaType" :type "NSString" :nullable false}]
+     :return   "NSInteger"
+     :doc      "Returns AVAuthorizationStatus raw integer"}
+    {:selector "defaultDeviceWithMediaType:"
+     :encoding "@@:@"
+     :args     [{:name "mediaType" :type "NSString" :nullable false}]
+     :return   "id"
+     :doc      "Returns default AVCaptureDevice for given media type string"}
+    {:selector "requestAccessForMediaType:completionHandler:"
+     :encoding "v@:@@"
+     :args     [{:name    "mediaType"
+                 :type    "NSString"
+                 :nullable false}
+                {:name       "handler"
+                 :type       "id"
+                 :pattern    :completion-handler
+                 :block-type :bool-error
+                 :nullable   false}]
+     :return   "void"
+     :doc      "Block receives (BOOL granted, NSError* _) — second arg ignored by iOS"}]
+   :methods    []
+   :properties []}
+
+  {:name       "AVCaptureDeviceInput"
+   :superclass "NSObject"
+   :init
+   [{:selector "deviceInputWithDevice:error:"
+     :encoding "@@:@@"
+     :args     [{:name "device"   :type "id" :nullable false}
+                {:name "outError" :type "id" :nullable true}]
+     :return   "id"
+     :doc      "Pass (f/null-ptr) for outError in simple usage"}]
+   :methods    []
+   :properties []}
+
+  {:name         "AVCaptureSession"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "new"
+     :encoding "@@:"
+     :args     []
+     :return   "id"
+     :doc      "Creates a new AVCaptureSession"}]
+   :methods
+   [{:selector "beginConfiguration"
+     :encoding "v@:"
+     :args     []
+     :return   "void"}
+    {:selector "commitConfiguration"
+     :encoding "v@:"
+     :args     []
+     :return   "void"}
+    {:selector "addInput:"
+     :encoding "v@:@"
+     :args     [{:name "input" :type "id" :nullable false}]
+     :return   "void"}
+    {:selector "addOutput:"
+     :encoding "v@:@"
+     :args     [{:name "output" :type "id" :nullable false}]
+     :return   "void"}
+    {:selector "canAddInput:"
+     :encoding "B@:@"
+     :args     [{:name "input" :type "id" :nullable false}]
+     :return   "BOOL"}
+    {:selector "canAddOutput:"
+     :encoding "B@:@"
+     :args     [{:name "output" :type "id" :nullable false}]
+     :return   "BOOL"}
+    {:selector "startRunning"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "stopRunning"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "isRunning"
+     :encoding "B@:"
+     :args     []
+     :return   "BOOL"}]
+   :properties []}
+
+  {:name       "AVCaptureVideoDataOutput"
+   :superclass "NSObject"
+   :init
+   [{:selector "new"
+     :encoding "@@:"
+     :args     []
+     :return   "id"}]
+   :methods
+   [{:selector "setSampleBufferDelegate:queue:"
+     :encoding "v@:@@"
+     :args     [{:name     "sampleBufferDelegate"
+                 :type     "id"
+                 :pattern  :delegate
+                 :protocol "AVCaptureVideoDataOutputSampleBufferDelegate"
+                 :nullable true}
+                {:name     "sampleBufferCallbackQueue"
+                 :type     "id"
+                 :nullable true}]
+     :return   "void"}]
+   :properties []}]
+
+ :protocols
+ [{:name    "AVCaptureVideoDataOutputSampleBufferDelegate"
+   :methods
+   [{:selector "captureOutput:didOutputSampleBuffer:fromConnection:"
+     :encoding "v@:@@@"
+     :args     [{:name "output"       :type "id"}
+                {:name "sampleBuffer" :type "id"}
+                {:name "connection"   :type "id"}]}
+    {:selector "captureOutput:didDropSampleBuffer:fromConnection:"
+     :encoding "v@:@@@"
+     :args     [{:name "output"       :type "id"}
+                {:name "sampleBuffer" :type "id"}
+                {:name "connection"   :type "id"}]}]}]
+
+ :enums
+ [{:name   "AVAuthorizationStatus"
+   :values
+   [{:name "AVAuthorizationStatusNotDetermined" :raw 0}
+    {:name "AVAuthorizationStatusRestricted"    :raw 1}
+    {:name "AVAuthorizationStatusDenied"        :raw 2}
+    {:name "AVAuthorizationStatusAuthorized"    :raw 3}]}]
+
+ :constants []}
