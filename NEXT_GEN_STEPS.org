@@ -154,7 +154,7 @@ Results: 32 tests (invoke+api), 87 total, 369 assertions, 0 failures.
 Note: coerce-out for object types (NSString, NSArray etc) requires native FFI;
 JVM tests use identity-return methods or override :return "id" in method-spec.
 
-** TODO 0.6 Patterns — delegates (~grease.ios.patterns~)
+** DONE 0.6 Patterns — delegates (~grease.ios.patterns~)
 
 Implement ~wrap-arg~ for ~:delegate~ pattern:
 - User passes ~{:keyword fn}~ map
@@ -167,6 +167,9 @@ Verify: ~(ios/make :location-manager)~ + ~(ios/call mgr :set-delegate {...})~
 produces same ~defclass!~ + ~msg-send~ sequence as ~dev/test_location.clj~.
 
 Gate: recorded call sequence matches the hand-written test exactly.
+
+Results: 8 tests, 18 assertions (patterns); 95 total, 387 assertions, 0 failures.
+Key insight: protocol methods require annotation in naming/transform-spec (:protocols update).
 
 ** TODO 0.7 Patterns — KVO + completion handlers
 

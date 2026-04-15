@@ -1,0 +1,64 @@
+;; CoreLocation framework spec — hand-written oracle.
+;;
+;; Reference implementation: dev/test_location.clj
+;; Classes covered: CLLocationManager
+;; Protocols: CLLocationManagerDelegate
+;;
+;; CLLocationManager and its delegate wiring must run on the main thread.
+
+{:framework "CoreLocation"
+ :doc-url   "https://developer.apple.com/documentation/corelocation"
+
+ :classes
+ [{:name        "CLLocationManager"
+   :superclass  "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "init"
+     :encoding "@@:"
+     :args     []
+     :return   "id"}]
+   :methods
+   [{:selector "startUpdatingLocation"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "stopUpdatingLocation"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "requestWhenInUseAuthorization"
+     :encoding "v@:"
+     :args     []
+     :return   "void"
+     :main-thread? true}
+    {:selector "setDelegate:"
+     :encoding "v@:@"
+     :args     [{:name     "delegate"
+                 :type     "id"
+                 :pattern  :delegate
+                 :protocol "CLLocationManagerDelegate"
+                 :nullable true}]
+     :return   "void"
+     :main-thread? true}]
+   :properties []}]
+
+ :protocols
+ [{:name    "CLLocationManagerDelegate"
+   :methods
+   [{:selector "locationManager:didUpdateLocations:"
+     :encoding "v@:@@"
+     :args     [{:name "manager"   :type "id"}
+                {:name "locations" :type "id"}]}
+    {:selector "locationManager:didFailWithError:"
+     :encoding "v@:@@"
+     :args     [{:name "manager" :type "id"}
+                {:name "error"   :type "id"}]}
+    {:selector "locationManagerDidChangeAuthorization:"
+     :encoding "v@:@"
+     :args     [{:name "manager" :type "id"}]}]}]
+
+ :enums     []
+ :constants []}

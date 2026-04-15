@@ -15,6 +15,7 @@
     (invoke/dispatch-class! \"NSMutableArray\" \"array\" method-spec [])"
   (:require [com.phronemophobic.grease :as grease]
             [grease.ios.objc :as objc]
+            [grease.ios.patterns :as patterns]
             [grease.ios.types :as types]))
 
 ;; =============================================================================
@@ -77,7 +78,10 @@
   (let [{:keys [ret arg-types]} (parse-encoding (:encoding method-spec))
         arg-specs  (:args method-spec)
         typed-args (mapcat (fn [spec kw val]
-                             [kw (types/coerce-in (:type spec "id") val)])
+                             (let [coerced (if (:pattern spec)
+                                             (patterns/wrap-arg spec val)
+                                             (types/coerce-in (:type spec "id") val))]
+                               [kw coerced]))
                            arg-specs arg-types arg-vals)
         raw-result (apply objc/msg-send ret receiver sel-str typed-args)
         ret-type   (:return method-spec "id")]

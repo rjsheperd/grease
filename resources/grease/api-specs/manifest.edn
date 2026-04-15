@@ -2,4 +2,5 @@
 ;; io/resource cannot enumerate a directory from a JAR, so this file
 ;; is the authoritative list.  The scraper updates it automatically.
 
-{:specs ["grease/api-specs/Foundation.edn"]}
+{:specs ["grease/api-specs/Foundation.edn"
+          "grease/api-specs/CoreLocation.edn"]}

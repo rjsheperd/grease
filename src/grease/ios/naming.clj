@@ -192,7 +192,10 @@
           (annotate-enum [e]
             (-> e
                 (assoc ::clj-name (->clj :class (:name e)))
-                (update :values (partial mapv annotate-enum-val))))]
+                (update :values (partial mapv annotate-enum-val))))
+          (annotate-protocol [p]
+            (update p :methods (partial mapv annotate-method)))]
     (-> spec
-        (update :classes (partial mapv annotate-class))
-        (update :enums   (partial mapv annotate-enum)))))
+        (update :classes   (partial mapv annotate-class))
+        (update :enums     (partial mapv annotate-enum))
+        (update :protocols (partial mapv annotate-protocol)))))

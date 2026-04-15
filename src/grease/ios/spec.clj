@@ -51,6 +51,9 @@
     (throw (ex-info (str (:framework spec) ": :classes must be a vector") {:spec spec})))
   (when-not (vector? (:enums spec))
     (throw (ex-info (str (:framework spec) ": :enums must be a vector") {:spec spec})))
+  ;; :protocols is optional; if present must be a vector
+  (when (and (contains? spec :protocols) (not (vector? (:protocols spec))))
+    (throw (ex-info (str (:framework spec) ": :protocols must be a vector") {:spec spec})))
   (doseq [cls (:classes spec)]
     (validate-class cls (:framework spec)))
   spec)

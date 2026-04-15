@@ -121,6 +121,14 @@
   []
   @spec-registry)
 
+(defn protocol-spec
+  "Returns the protocol map for the given ObjC protocol name string, or nil."
+  [protocol-name]
+  (some (fn [[_ spec]]
+          (some #(when (= (:name %) protocol-name) %)
+                (:protocols spec)))
+        @spec-registry))
+
 (defn enum-raw-for
   "Returns the raw integer value for the given enum keyword within the named enum,
   or nil if not found."
