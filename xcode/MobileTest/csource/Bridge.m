@@ -6,7 +6,9 @@
 #include "Bridge.h"
 #include "bb.h"
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #include <objc/message.h>
+#include <objc/runtime.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -273,4 +275,63 @@ void *grease_make_bool_error_block(GrallBoolErrFn fn) {
 void grease_call_void_block(void *block) {
     void (^b)(void) = (__bridge void (^)(void))block;
     b();
+}
+
+// =============================================================================
+// UIKit frame / geometry shims
+//
+// CGRect, CGPoint, and CGSize are C structs.  Returning structs through a
+// void* FFI call is architecture-specific and clj-libffi does not support
+// struct returns.  These scalar wrappers decompose the structs into doubles
+// so Clojure can read / write frames without any struct marshaling.
+//
+// All functions must be invoked on the main thread (UIKit requirement).
+// =============================================================================
+
+void grease_set_frame(void *view, double x, double y, double w, double h) {
+    UIView *v = (__bridge UIView *)view;
+    v.frame = CGRectMake(x, y, w, h);
+}
+
+double grease_get_frame_x(void *view) {
+    return ((__bridge UIView *)view).frame.origin.x;
+}
+
+double grease_get_frame_y(void *view) {
+    return ((__bridge UIView *)view).frame.origin.y;
+}
+
+double grease_get_frame_w(void *view) {
+    return ((__bridge UIView *)view).frame.size.width;
+}
+
+double grease_get_frame_h(void *view) {
+    return ((__bridge UIView *)view).frame.size.height;
+}
+
+void grease_set_center(void *view, double cx, double cy) {
+    UIView *v = (__bridge UIView *)view;
+    v.center = CGPointMake(cx, cy);
+}
+
+double grease_get_center_x(void *view) {
+    return ((__bridge UIView *)view).center.x;
+}
+
+double grease_get_center_y(void *view) {
+    return ((__bridge UIView *)view).center.y;
+}
+
+void *grease_class_method_names(void *cls) {
+    uint count = 0;
+    Method *methods = class_copyMethodList((__bridge Class)cls, &count);
+    NSMutableArray *names = [NSMutableArray arrayWithCapacity:count];
+    for (uint i = 0; i < count; i++) {
+        const char *selName = sel_getName(method_getName(methods[i]));
+        if (selName) {
+            [names addObject:[NSString stringWithUTF8String:selName]];
+        }
+    }
+    if (methods) free(methods);
+    return (__bridge_retained void *)names;
 }

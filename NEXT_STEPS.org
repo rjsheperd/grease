@@ -176,46 +176,54 @@ reference (held in a global atom to prevent GC).
   (msg-send :void task "resume"))
 #+end_src
 
-* Phase 3 — Struct Arg Handling (UIKit Frames)
+* Phase 3 — Struct Arg Handling (UIKit Frames) [2/3] :IN-PROGRESS:
 
 ~CGRect~, ~CGPoint~, ~CGSize~, and ~CGAffineTransform~ are C structs, not
-pointers. Most UIKit layout methods require them. ~objc_msgSend_stret~ handles
-struct-returning methods on some architectures (arm64 uses registers for
-small structs).
+pointers. Most UIKit layout methods require them. Solved with scalar wrappers
+in Bridge.m; ~objc_msgSend_stret~ investigation remains.
 
-** TODO 3.1 Write scalar-arg C shims for common UIKit layout
+** DONE 3.1 Write scalar-arg C shims for common UIKit layout
+
+Added to ~xcode/MobileTest/csource/Bridge.m~ and ~Bridge.h~:
 
 #+begin_src objc
-// In grease_uikit.m
-void grease_set_frame(id view, double x, double y, double w, double h) {
-    view.frame = CGRectMake(x, y, w, h);
-}
-CGRect grease_get_frame(id view) { return view.frame; }
-void grease_set_center(id view, double cx, double cy) {
-    view.center = CGPointMake(cx, cy);
-}
+void   grease_set_frame(void *view, double x, double y, double w, double h);
+double grease_get_frame_x(void *view);
+double grease_get_frame_y(void *view);
+double grease_get_frame_w(void *view);
+double grease_get_frame_h(void *view);
+void   grease_set_center(void *view, double cx, double cy);
+double grease_get_center_x(void *view);
+double grease_get_center_y(void *view);
 #+end_src
 
-** TODO 3.2 Expose shims via clj-libffi
+Uses ~(__bridge UIView *)view~ cast + dot-syntax property access.
+~#import <UIKit/UIKit.h>~ added to Bridge.m.
+
+** DONE 3.2 Expose shims via clj-libffi
+
+~src/grease/ios/uikit.clj~ created and loaded into SCI context at startup:
 
 #+begin_src clojure
-(defn set-frame! [view x y w h]
-  (dispatch-main-async
-    #(ffi/call "grease_set_frame" :void :pointer view
-               :float64 x :float64 y :float64 w :float64 h)))
-
 (defn get-frame [view]
-  ;; Returns struct — need grease_get_frame_x/y/w/h scalar wrappers
   {:x (ffi/call "grease_get_frame_x" :float64 :pointer view)
    :y (ffi/call "grease_get_frame_y" :float64 :pointer view)
    :w (ffi/call "grease_get_frame_w" :float64 :pointer view)
    :h (ffi/call "grease_get_frame_h" :float64 :pointer view)})
+
+(defn set-frame! [view x y w h]
+  (ffi/call "grease_set_frame" :void
+            :pointer view :float64 x :float64 y :float64 w :float64 h))
 #+end_src
+
+Also includes: ~key-window~, ~root-view~, ~subviews~, ~describe-view~,
+~new-label~, ~add-subview!~, ~remove-from-superview!~, ~get-center~, ~set-center!~.
 
 ** TODO 3.3 Investigate ~objc_msgSend_stret~ for struct return via FFI
 
 Determine if ~clj-libffi~ can call ~objc_msgSend_stret~ with a struct output
 buffer. If yes, eliminates the need for C shims for struct-returning methods.
+Low priority given the scalar-wrapper approach already works.
 
 * Phase 4 — UIKit Live Manipulation
 

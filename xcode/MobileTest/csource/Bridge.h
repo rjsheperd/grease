@@ -47,6 +47,21 @@ void *grease_make_bool_error_block(GrallBoolErrFn fn);
 // Testing helper: invoke a void block by its opaque pointer.
 void  grease_call_void_block(void *block);
 
+// Introspection — returns a +1-retained NSArray<NSString*> of selector names
+// for all methods registered on cls (direct methods only, not inherited).
+void *grease_class_method_names(void *cls);
+
+// UIKit frame / geometry shims — avoids CGRect struct return via FFI.
+// All functions must be called on the main thread.
+void   grease_set_frame(void *view, double x, double y, double w, double h);
+double grease_get_frame_x(void *view);
+double grease_get_frame_y(void *view);
+double grease_get_frame_w(void *view);
+double grease_get_frame_h(void *view);
+void   grease_set_center(void *view, double cx, double cy);
+double grease_get_center_x(void *view);
+double grease_get_center_y(void *view);
+
 #ifdef __cplusplus
 }
 #endif
