@@ -449,7 +449,7 @@ Gate per framework: EDN loads without validation errors; oracle test passes.
 
 * Phase 7 — Round-trip test suite (Step 13)
 
-** TODO 7.1 Write ~test/grease/ios/oracle_test.clj~
+** DONE 7.1 Write ~test/grease/ios/oracle_test.clj~
 
 For every loaded spec:
 - Every method has resolvable arg types
@@ -463,6 +463,14 @@ This is the regression net for future scraper changes.
 clj -M:test test/grease/ios/oracle_test.clj
 # => 0 failures, N assertions
 #+end_src
+
+Results: 11 tests, 385 assertions (oracle); 197 total, 1028 assertions, 0 failures.
+Covers 5 frameworks × all classes/methods/enums/protocols.
+Tests: all-method-return-types-resolve, all-method-arg-types-resolve,
+all-enum-values-have-clj-name, all-enums-kw->raw, all-enums-raw->kw,
+all-protocols-accessible, all-protocol-methods-have-selectors,
+all-classes-in-registry, all-classes-have-required-keys,
+all-methods-findable-by-selector, all-protocols-name-matches.
 
 * Open Questions (from §9 of NEXT_GEN_ARCH.md)
 
