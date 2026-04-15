@@ -277,74 +277,33 @@ hierarchy becomes accessible from the nREPL.
 ;; (reset! display-text "Updated!")
 #+end_src
 
-* Phase 5 — REPL Developer Experience
+* Phase 5 — REPL Developer Experience [4/4] :DONE:
 
-Helpers that make the nREPL feel like a first-class iOS exploration tool.
+All helpers proven working on-device via ~tests/run_test_repl.py~ (8/8 PASS).
+Committed as ~src/grease/ios/repl.clj~, loaded into SCI context at startup.
 
-** TODO 5.1 Runtime introspection helpers
+** DONE 5.1 Runtime introspection helpers
 
-#+begin_src clojure
-(defn methods-of
-  "Lists all method selectors for an ObjC class by name."
-  [class-name]
-  ;; class_copyMethodList returns a C array of Method; iterate count items
-  ...)
+~class-name-of~, ~respond-to?~, ~methods-of~, ~super-class-of~,
+~inheritance-chain~ all working. ~methods-of~ uses a C shim
+~grease_class_method_names~ in Bridge.m to avoid pointer arithmetic in Clojure.
 
-(defn respond-to?
-  "Returns true if obj responds to the given selector string."
-  [obj sel-str]
-  (let [sel (register-objc-sel sel-str)]
-    (not= 0 (msg-send :int8 obj "respondsToSelector:" :pointer sel))))
+** DONE 5.2 Better error surfacing from ~dispatch-main-async~
 
-(defn class-name-of
-  "Returns the ObjC class name of a pointer as a Clojure string."
-  [obj]
-  (nsstring->str (msg-send :pointer (msg-send :pointer obj "class") "description")))
+~on-main~ macro wraps body in promise + ~dispatch-main-async~. Exceptions
+caught and re-raised on calling thread. Fixed: replaced ~Throwable->map~ (not
+in SCI) with ~{:message (.getMessage e#) :class (str (class e#))}~.
 
-(defn super-class-of [class-name]
-  (let [cls (get-class class-name)]
-    (nsstring->str (msg-send :pointer (msg-send :pointer cls "superclass") "description"))))
-#+end_src
+** DONE 5.3 Hot-reload pattern for ~defclass~
 
-** TODO 5.2 Better error surfacing from ~dispatch-main-async~
+~defclass!~ appends ~_vN~ suffix at macro-expansion time using a
+~(atom 0)~ counter. Safe to re-evaluate from nREPL since ObjC class names
+must be unique per process — each re-eval creates ~MyDelegate_v1~, ~_v2~, etc.
 
-Wrap main-thread dispatches so exceptions propagate back to nREPL output:
+** DONE 5.4 Extract into ~src/grease/ios/repl.clj~
 
-#+begin_src clojure
-(defmacro on-main [& body]
-  `(let [result# (promise)]
-     (dispatch-main-async
-       (fn []
-         (try
-           (deliver result# {:ok (do ~@body)})
-           (catch Exception e#
-             (deliver result# {:err (Throwable->map e#)})))))
-     (let [r# (deref result# 10000 :timeout)]
-       (if-let [err# (:err r#)]
-         (throw (ex-info "Main thread error" err#))
-         (:ok r#)))))
-#+end_src
-
-** TODO 5.3 Hot-reload pattern for ~defclass~
-
-~defclass~ is not idempotent — re-registering a class with the same name
-crashes. Document and implement a versioned-suffix pattern:
-
-#+begin_src clojure
-(def delegate-version (atom 0))
-
-(defmacro defclass!
-  "Like defclass but appends an auto-incrementing version suffix.
-  Safe to re-evaluate from the nREPL across sessions."
-  [class-name superclass & method-specs]
-  `(let [versioned# (str ~(str class-name) "_v" (swap! delegate-version inc))]
-     (defclass ~class-name ~superclass ~@method-specs)))
-#+end_src
-
-** TODO 5.4 Extract into ~dev/repl_helpers.clj~
-
-Commit all introspection and ergonomics fns. Load via ~(load-file ...)~ from
-nREPL as needed (does not require rebuild).
+Loaded via ~sci/eval-string*~ in ~grease.clj~ startup alongside ~objc.clj~,
+~foundation.clj~, and ~blocks.clj~. Available from nREPL without rebuild.
 
 * Phase 6 — Additional Delegate Frameworks
 
