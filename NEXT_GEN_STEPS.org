@@ -119,7 +119,7 @@ Gate: ~(spec/load-all)~ returns Foundation entry;
 
 Results: 25 tests, 72 assertions (spec+registry); 55 total across all suites, 0 failures.
 
-** TODO 0.5 Invoke + API — ~grease.ios.invoke~ + ~grease.ios.api~
+** DONE 0.5 Invoke + API — ~grease.ios.invoke~ + ~grease.ios.api~
 
 Implement the dispatch core.  With mock bridge, verify the full pipeline.
 
@@ -149,6 +149,10 @@ Algorithm (from §4.6):
 Gate (oracle test): for every function in ~grease.ios.foundation~, assert
 the engine-emitted ~msg-send~ sequence is byte-identical to what the
 hand-written wrapper produces.
+
+Results: 32 tests (invoke+api), 87 total, 369 assertions, 0 failures.
+Note: coerce-out for object types (NSString, NSArray etc) requires native FFI;
+JVM tests use identity-return methods or override :return "id" in method-spec.
 
 ** TODO 0.6 Patterns — delegates (~grease.ios.patterns~)
 

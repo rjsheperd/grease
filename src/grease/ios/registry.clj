@@ -115,3 +115,22 @@
   "Returns the pointer currently retained under key, or nil."
   [key]
   (get @retention-table key))
+
+(defn all-specs
+  "Returns the current spec-registry as a map of framework-keyword -> annotated spec."
+  []
+  @spec-registry)
+
+(defn enum-raw-for
+  "Returns the raw integer value for the given enum keyword within the named enum,
+  or nil if not found."
+  [enum-name kw]
+  (some (fn [[_ spec]]
+          (some (fn [e]
+                  (when (= (:name e) enum-name)
+                    (some (fn [v]
+                            (when (= (::naming/clj-name v) kw)
+                              (:raw v)))
+                          (:values e))))
+                (:enums spec)))
+        @spec-registry))

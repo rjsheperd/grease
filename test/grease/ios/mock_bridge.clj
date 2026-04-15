@@ -46,7 +46,7 @@
 ;; Mock implementations
 ;; =============================================================================
 
-(defn ^:private mock-msg-send
+(defn mock-msg-send
   "Records call and returns canned response or nil."
   [ret-type obj sel & typed-args]
   (swap! call-log conj {:ret-type ret-type
@@ -55,12 +55,12 @@
                         :args     (vec typed-args)})
   (get @response-map sel nil))
 
-(defn ^:private mock-get-class
+(defn mock-get-class
   "Returns a synthetic class pointer map."
   [class-name]
   {:class-name class-name})
 
-(defn ^:private mock-objc-new
+(defn mock-objc-new
   "Returns a synthetic instance pointer map."
   [cls]
   {:instance-of cls})
@@ -72,12 +72,12 @@
   (swap! call-log conj {:op :defclass! :class-name class-name :superclass superclass})
   {:class-name class-name :mocked true})
 
-(defn ^:private mock-null-ptr
+(defn mock-null-ptr
   "Returns a sentinel value for null pointers."
   []
   ::null-ptr)
 
-(defn ^:private mock-main-queue
+(defn mock-main-queue
   "Returns a sentinel for the main GCD queue."
   []
   ::main-queue)
