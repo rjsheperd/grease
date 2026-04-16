@@ -9,12 +9,13 @@
   - [[grease.ios.objc/msg-send]] — the actual bridge (mockable in tests)
   - [[grease.ios.types]]         — coerce-in / coerce-out / encoding-for
   - [[grease.ios.registry]]      — method-spec / class-spec
-  - [[grease.ios.structs]]       — struct-return detection + pack/unpack
+  - [[grease.ios.structs]]       — struct layout / pack / unpack
 
-  Struct returns (e.g. CGPoint, CLLocationCoordinate2D) use libffi's struct
-  return support via [[ffi/call-ptr]] with a [[dt-struct/define-datatype!]]
-  type.  This handles both HFA (≤ 16 bytes, returned in float registers) and
-  large structs (> 16 bytes, returned via hidden x8 pointer on arm64).
+  Struct arguments and struct returns both use [[ffi/call-ptr]] with
+  composite [[dt-struct/define-datatype!]] types.  libffi generates correct
+  ARM64 calling code — HFAs (≤ 4 homogeneous float/double fields) are passed
+  and returned in the d0–d3 floating-point registers; larger structs use the
+  hidden x8 stret pointer convention.  No C shims are required.
 
   Usage:
     (invoke/dispatch! receiver \"play\" method-spec [])
@@ -26,6 +27,7 @@
             [grease.ios.patterns :as patterns]
             [grease.ios.structs :as structs]
             [grease.ios.types :as types]
+            [tech.v3.datatype :as dtype]
             [tech.v3.datatype.ffi :as dt-ffi]
             [tech.v3.datatype.struct :as dt-struct]))
 
@@ -72,7 +74,7 @@
    :arg-types (arg-kws encoding)})
 
 ;; =============================================================================
-;; Struct return support (Phase 10.2.4)
+;; Struct support — args and returns
 ;; =============================================================================
 
 (def ^:private prim->dtype
@@ -84,8 +86,8 @@
    "int8"   :int8    "uint8"  :uint8})
 
 (defn- ensure-ffi-struct!
-  "Registers struct-name in the dt-struct type registry so that libffi can
-  use it as a CIF return type.  Nested struct fields are registered
+  "Registers struct-name in the dt-struct type registry so libffi can build
+  a composite ffi_type for it.  Nested struct fields are registered
   recursively.  Idempotent — safe to call every dispatch."
   [struct-name]
   (when-not (dt-struct/struct-datatype? (keyword struct-name))
@@ -101,8 +103,8 @@
               (:fields spec))))))
 
 (def ^:private msg-send-fptr
-  "Lazy reference to objc_msgSend function pointer.
-  Resolved once at first struct-return call."
+  "Lazy reference to the objc_msgSend function pointer.
+  Resolved once on first struct dispatch."
   (delay (ffi/dlsym ffi/RTLD_DEFAULT (dt-ffi/string->c "objc_msgSend"))))
 
 (defn- dt-struct->clj
@@ -119,17 +121,23 @@
                          val)]))
                (:fields spec)))))
 
-(defn- msg-send-stret!
-  "Calls objc_msgSend with a struct return type via libffi struct support.
-  Works for both HFA (≤ 16 bytes) and large structs (> 16 bytes) on arm64.
-  typed-args is a flat seq of alternating type-kw/value pairs."
-  [receiver sel-str struct-name typed-args]
-  (ensure-ffi-struct! struct-name)
-  (let [sel    (grease/register-objc-sel sel-str)
-        result (apply ffi/call-ptr @msg-send-fptr (keyword struct-name)
-                      :pointer receiver :pointer sel
-                      typed-args)]
-    (dt-struct->clj struct-name result)))
+(defn- clj->dt-struct
+  "Converts a Clojure keyword map to a native-heap dt-struct instance for use
+  as a struct-valued argument in [[ffi/call-ptr]].
+
+  Uses [[structs/pack]] (ByteBuffer) as the layout source of truth, then
+  copies the bytes into a GC-tracked native allocation and wraps it with
+  [[dt-struct/inplace-new-struct]].  [[ensure-ffi-struct!]] must be called
+  for struct-name before this function."
+  [struct-name m]
+  (let [bb   (structs/pack struct-name m)
+        size (:size (structs/struct-for struct-name))
+        arr  (byte-array size)]
+    (.position bb 0)
+    (.get bb arr)
+    (dt-struct/inplace-new-struct
+     (keyword struct-name)
+     (dtype/make-container :native-heap :int8 arr {:resource-type :gc}))))
 
 ;; =============================================================================
 ;; Auto-coercion for id-typed arguments
@@ -168,24 +176,62 @@
   - arg-vals    — seq of Clojure values, one per method argument
 
   Coercion is driven by the method spec `:args` and `:return` fields.
-  The `:encoding` field drives the msg-send wire types."
+  The `:encoding` field drives the wire types.
+
+  When any argument or the return type is a known struct, the call is routed
+  through [[ffi/call-ptr]] with composite ffi_type descriptors so that libffi
+  generates correct ARM64 calling code (HFA registers or stret pointer).
+  No C shims are needed for struct-boundary methods."
   [receiver sel-str method-spec arg-vals]
   (let [{:keys [ret arg-types]} (parse-encoding (:encoding method-spec))
-        arg-specs  (:args method-spec)
-        typed-args (mapcat (fn [spec kw val]
-                             (let [coerced (if (:pattern spec)
-                                             (patterns/wrap-arg spec val)
-                                             (if (= (:type spec "id") "id")
-                                               (coerce-id-arg val)
-                                               (types/coerce-in (:type spec "id") val)))]
-                               [kw coerced]))
-                           arg-specs arg-types arg-vals)
-        ret-type   (:return method-spec "id")]
-    (if (structs/known-struct? ret-type)
-      ;; Struct return: use libffi struct-return path (handles HFA + stret on arm64)
-      (msg-send-stret! receiver sel-str ret-type typed-args)
-      ;; Normal return: use objc/msg-send with coerce-out
-      (let [raw-result (apply objc/msg-send ret receiver sel-str typed-args)]
+        arg-specs    (:args method-spec)
+        ret-type     (:return method-spec "id")
+        struct-ret?  (structs/known-struct? ret-type)
+        struct-arg?  (some #(structs/known-struct? (:type % "id")) arg-specs)]
+    (if (or struct-ret? struct-arg?)
+      ;; ── Struct path ──────────────────────────────────────────────────────────
+      ;; At least one struct involved.  Use ffi/call-ptr so libffi can apply the
+      ;; correct ARM64 calling convention (HFA d-registers / stret x8 pointer).
+      (let [ffi-typed-args
+            (mapcat (fn [spec arg-kw val]
+                      (let [type-name (:type spec "id")]
+                        (cond
+                          (:pattern spec)
+                          [arg-kw (patterns/wrap-arg spec val)]
+
+                          (structs/known-struct? type-name)
+                          (do (ensure-ffi-struct! type-name)
+                              [(keyword type-name) (clj->dt-struct type-name val)])
+
+                          (= type-name "id")
+                          [arg-kw (coerce-id-arg val)]
+
+                          :else
+                          [arg-kw (types/coerce-in type-name val)])))
+                    arg-specs arg-types arg-vals)
+            ffi-ret  (if struct-ret?
+                       (do (ensure-ffi-struct! ret-type) (keyword ret-type))
+                       ret)
+            sel      (grease/register-objc-sel sel-str)
+            result   (apply ffi/call-ptr @msg-send-fptr ffi-ret
+                            :pointer receiver :pointer sel
+                            ffi-typed-args)]
+        (if struct-ret?
+          (dt-struct->clj ret-type result)
+          (types/coerce-out ret-type result)))
+
+      ;; ── Fast path ────────────────────────────────────────────────────────────
+      ;; No structs anywhere — use objc/msg-send directly (cheaper CIF).
+      (let [typed-args
+            (mapcat (fn [spec kw val]
+                      (let [coerced (if (:pattern spec)
+                                      (patterns/wrap-arg spec val)
+                                      (if (= (:type spec "id") "id")
+                                        (coerce-id-arg val)
+                                        (types/coerce-in (:type spec "id") val)))]
+                        [kw coerced]))
+                    arg-specs arg-types arg-vals)
+            raw-result (apply objc/msg-send ret receiver sel-str typed-args)]
         (types/coerce-out ret-type raw-result)))))
 
 (defn dispatch-class!

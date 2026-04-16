@@ -3,9 +3,10 @@
 ;; The auto-scraped version pulled Swift documentation and is not usable.
 ;; This spec covers the ObjC subset needed for the map+tab-bar demo app.
 ;;
-;; IMPORTANT — MKCoordinateRegion is a C struct (32 bytes).
-;; setRegion:animated: is marked :unsupported true; use the C shim
-;; grease_set_map_region from Bridge.m instead (see demo_app/map.clj).
+;; MKCoordinateRegion is a 32-byte C struct (two 16-byte HFA sub-structs).
+;; setRegion:animated: passes it by value in ARM64 floating-point registers.
+;; grease.ios.invoke/dispatch! handles this via ffi/call-ptr + composite
+;; ffi_type — no C shim required.
 ;;
 ;; All MKMapView operations must run on the main thread.
 
@@ -63,9 +64,8 @@
      :return       "void"
      :args         [{:name "region"   :type "MKCoordinateRegion"}
                     {:name "animated" :type "BOOL"}]
-     :unsupported  true
      :main-thread? true
-     :doc          "UNSUPPORTED via engine — struct arg. Use grease_set_map_region C shim instead."}]
+     :doc          "Centers the map on region (MKCoordinateRegion struct by value). Dispatched via libffi composite ffi_type — no C shim needed."}]
    :properties []}
 
   {:name       "MKUserLocation"
