@@ -354,3 +354,32 @@
             _blk   (patterns/wrap-arg spec (fn [ok _err] (reset! result ok)))]
         (mock/invoke-block! (first (mock/captured-blocks)) 1 nil)
         (is (= 1 @result))))))
+
+;; =============================================================================
+;; Phase 9.2 — :block-args typed block path
+;; =============================================================================
+
+(deftest completion-handler-block-args-test
+  (testing "wrap-arg :completion-handler with :block-args uses make-typed-block"
+    (mock/with-mock
+      (let [received (atom nil)
+            spec     {:name "handler" :type "id"
+                      :pattern    :completion-handler
+                      :block-args [:pointer]}
+            blk      (patterns/wrap-arg spec #(reset! received %))]
+        (is (= :typed    (:block-type blk)))
+        (is (= [:pointer] (:args blk)))
+        (is (= :void     (:ret blk)))
+        (mock/invoke-block! blk ::some-ptr)
+        (is (= ::some-ptr @received))))))
+
+(deftest completion-handler-block-args-ret-test
+  (testing "wrap-arg :completion-handler :block-args with explicit :block-ret"
+    (mock/with-mock
+      (let [spec {:name "handler" :type "id"
+                  :pattern    :completion-handler
+                  :block-ret  :void
+                  :block-args [:pointer :pointer]}
+            blk  (patterns/wrap-arg spec (fn [_ _] nil))]
+        (is (= :typed              (:block-type blk)))
+        (is (= [:pointer :pointer] (:args blk)))))))

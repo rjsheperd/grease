@@ -223,12 +223,14 @@
 
 (defmethod wrap-arg* :completion-handler
   [arg-spec callback-fn]
-  ;; Wrap callback-fn in the appropriate ObjC block type.
-  ;; :block-type in arg-spec drives the factory: :void (default), :data, :bool-error.
-  (case (get arg-spec :block-type :void)
-    :data       (blocks/make-data-block callback-fn)
-    :bool-error (blocks/make-bool-error-block callback-fn)
-    (blocks/make-void-block callback-fn)))
+  ;; Preferred path: :block-args vector drives make-typed-block directly.
+  ;; Legacy path: :block-type keyword for backward compatibility with older specs.
+  (if-let [arg-kws (:block-args arg-spec)]
+    (blocks/make-typed-block (get arg-spec :block-ret :void) arg-kws callback-fn)
+    (case (get arg-spec :block-type :void)
+      :data       (blocks/make-data-block callback-fn)
+      :bool-error (blocks/make-bool-error-block callback-fn)
+      (blocks/make-void-block callback-fn))))
 
 (defmethod wrap-arg* :default
   [_ val]

@@ -773,27 +773,22 @@ Returns ~{:block-type :typed :ret ret-kw :args arg-kws :fn f}~, recorded in bloc
 
 5 JVM tests (58 total across blocks + invoke + patterns + coerce), 0 failures.
 
-** TODO 9.2 Wire typed blocks into ~:completion-handler~ pattern
+** DONE 9.2 Wire typed blocks into ~:completion-handler~ pattern
 
-The ~:completion-handler~ pattern in ~grease.ios.patterns~ currently creates a block
-only in mock tests (via ~mock-bridge/invoke-block!~).  Wire in ~make-typed-block~ so
-the engine creates a real block on device.
+Updated ~wrap-arg*~ :completion-handler method in ~patterns.clj~ to check for
+~:block-args~ first (new path) before falling back to legacy ~:block-type~ dispatch.
+New spec key ~:block-args~ (e.g. ~[:pointer :pointer]~) drives ~make-typed-block~
+directly; optional ~:block-ret~ defaults to ~:void~.  All 25 existing patterns tests
+pass unchanged; 2 new tests (~completion-handler-block-args-test~,
+~completion-handler-block-args-ret-test~) verify the :block-args path.
 
-Determine the block signature from the method spec encoding: chars after position 3
-that correspond to the completion-handler arg become the block's arg types.
+*** DONE 9.2.1 Update ~wrap-arg*~ :completion-handler method in ~patterns.clj~
 
-#+begin_src clojure
-;; CoreData async save example — from the engine after this phase:
-(let [p (ios/call ctx :perform-block-and-wait)]
-  @p)  ; => {:saved true}
+~:block-args~ path added before the legacy ~:block-type~ case dispatch.
 
-;; HealthKit auth — currently requires manual make-bool-error-block
-(let [p (ios/call store :request-authorization-to-share:read:completion:
-                  share-types read-types)]
-  @p)  ; => {:granted true}
-#+end_src
+*** DONE 9.2.2 Add typed block tests in ~patterns_test.clj~
 
-Gate: existing patterns tests pass; new test exercises typed block round-trip.
+Two new tests: :block-args path creates :typed sentinel; invoke-block! works.
 
 * Phase 10 — Struct Support via Header Parsing (objcjure-inspired)
 
