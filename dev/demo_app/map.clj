@@ -5,7 +5,9 @@
 ;; by grease_set_map_region in Bridge.m.
 
 (ns demo-app.map
-  (:require [com.phronemophobic.clj-libffi :as ffi]))
+  (:require [com.phronemophobic.clj-libffi :as ffi]
+            [com.phronemophobic.grease     :as grease]
+            [grease.ios.objc               :as objc-rt]))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; Screen geometry (scalar shims — avoids CGRect struct return)
@@ -43,3 +45,18 @@
 (def apple-hq-lat   37.3346)
 (def apple-hq-lng -122.0090)
 (def default-span    0.05)
+
+;; ─────────────────────────────────────────────────────────────────────────────
+;; User location tracking
+;; ─────────────────────────────────────────────────────────────────────────────
+
+(defn follow-user!
+  "Switches map-view to MKUserTrackingModeFollow (value 1) so MapKit keeps the
+  map centered on the GPS fix automatically. Safe to call from any thread —
+  dispatches to the main thread asynchronously."
+  [map-view]
+  (grease/dispatch-main-async
+   (fn []
+     (objc-rt/msg-send :void map-view
+                       "setUserTrackingMode:animated:"
+                       :int64 1 :int8 1))))

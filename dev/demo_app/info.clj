@@ -11,6 +11,7 @@
             [grease.ios.foundation         :as f]
             [grease.ios.objc               :as objc-rt]
             [grease.ios.uikit              :as ui]
+            [com.phronemophobic.grease     :as grease]
             [grease.ios.repl               :refer [on-main]]))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
@@ -55,18 +56,19 @@
 
 (defn update!
   "Refreshes the Info tab labels from a CLLocation pointer.
-  labels is the map returned by install!. Safe to call from any thread;
-  wraps UIKit mutations in on-main."
+  labels is the map returned by install!. Safe to call from any thread,
+  including the main thread — dispatches asynchronously so it never blocks."
   [labels loc]
   (when (and labels loc)
     (let [{:keys [lat-lbl lng-lbl acc-lbl]} labels
           lat-v (loc/latitude  loc)
           lng-v (loc/longitude loc)
           acc-v (loc/accuracy  loc)]
-      (on-main
-       (objc-rt/msg-send :void lat-lbl "setText:"
-                         :pointer (f/->nsstring (format "Lat: %.6f" lat-v)))
-       (objc-rt/msg-send :void lng-lbl "setText:"
-                         :pointer (f/->nsstring (format "Lng: %.6f" lng-v)))
-       (objc-rt/msg-send :void acc-lbl "setText:"
-                         :pointer (f/->nsstring (format "Accuracy: ±%.0fm" acc-v)))))))
+      (grease/dispatch-main-async
+       (fn []
+         (objc-rt/msg-send :void lat-lbl "setText:"
+                           :pointer (f/->nsstring (format "Lat: %.6f" lat-v)))
+         (objc-rt/msg-send :void lng-lbl "setText:"
+                           :pointer (f/->nsstring (format "Lng: %.6f" lng-v)))
+         (objc-rt/msg-send :void acc-lbl "setText:"
+                           :pointer (f/->nsstring (format "Accuracy: ±%.0fm" acc-v))))))))

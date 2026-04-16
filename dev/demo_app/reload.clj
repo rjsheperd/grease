@@ -5,12 +5,12 @@
 
 (ns demo-app.reload
   (:require [demo-app.location :as loc]
-            [demo-app          :as app]))
+            [demo-app]))
 
 (defn restart!
   "Stops location updates, resets all atoms, and rebuilds the full UI.
   Safe to call multiple times from the nREPL."
   []
   (loc/clear!)
-  (app/reset-state!)
-  (app/start!))
+  (demo-app/reset-state!)
+  (demo-app/start!))

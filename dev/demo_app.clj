@@ -22,14 +22,15 @@
 ;;   (demo-app.reload/restart!)
 
 (ns demo-app
-  (:require [com.phronemophobic.grease :as grease]
-            [demo-app.info             :as info]
-            [demo-app.location         :as loc]
-            [demo-app.map              :as m]
-            [grease.ios.foundation     :as f]
-            [grease.ios.objc           :as objc-rt]
-            [grease.ios.uikit          :as ui]
-            [grease.ios.repl           :refer [on-main]]))
+  (:require [com.phronemophobic.clj-libffi :as ffi]
+            [com.phronemophobic.grease     :as grease]
+            [demo-app.info                 :as info]
+            [demo-app.location             :as loc]
+            [demo-app.map                  :as m]
+            [grease.ios.foundation         :as f]
+            [grease.ios.objc               :as objc-rt]
+            [grease.ios.repl               :refer [on-main]]
+            [grease.ios.uikit              :as ui]))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; App state — all live ObjC pointers retained here to prevent ARC collection.
@@ -38,19 +39,20 @@
 
 (defonce app-state
   (atom {:tab-bar     nil
-         :map-nav     nil
          :map-vc      nil
-         :info-nav    nil
          :info-vc     nil
          :map-view    nil
          :info-labels nil}))
 
+;; Set to true after the first GPS fix enables MKUserTrackingModeFollow.
+(defonce ^:private map-following? (atom false))
+
 (defn reset-state!
   "Resets app-state to blank. Call before rebuilding the UI."
   []
-  (reset! app-state {:tab-bar nil :map-nav nil :map-vc nil
-                     :info-nav nil :info-vc nil :map-view nil
-                     :info-labels nil}))
+  (reset! app-state {:tab-bar nil :map-vc nil :info-vc nil
+                     :map-view nil :info-labels nil})
+  (reset! map-following? false))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; Helpers
@@ -84,20 +86,14 @@
     vc))
 
 (defn install-tab-bar!
-  "Creates UITabBarController with Map + Info tabs and installs it as the
-  app's rootViewController via GreaseHook.shared.window."
+  "Creates UITabBarController with Map + Info tabs (no nav controllers) and
+  installs it as the app's rootViewController via GreaseHook.shared.window."
   []
   (on-main
-   (let [map-vc   (make-plain-vc! "systemBackgroundColor")
-         info-vc  (make-plain-vc! "systemGroupedBackgroundColor")
-         map-nav  (objc-rt/msg-send :pointer
-                                    (objc-rt/msg-send :pointer (get-class "UINavigationController") "alloc")
-                                    "initWithRootViewController:" :pointer map-vc)
-         info-nav (objc-rt/msg-send :pointer
-                                    (objc-rt/msg-send :pointer (get-class "UINavigationController") "alloc")
-                                    "initWithRootViewController:" :pointer info-vc)
-         tab-bar  (new-instance "UITabBarController")
-         vcs      (f/->nsarray [map-nav info-nav])]
+   (let [map-vc  (make-plain-vc! "systemBackgroundColor")
+         info-vc (make-plain-vc! "systemGroupedBackgroundColor")
+         tab-bar (new-instance "UITabBarController")
+         vcs     (f/->nsarray [map-vc info-vc])]
      (objc-rt/msg-send :void map-vc  "setTabBarItem:" :pointer (make-tab-item! "Map"  0))
      (objc-rt/msg-send :void info-vc "setTabBarItem:" :pointer (make-tab-item! "Info" 1))
      (objc-rt/msg-send :void tab-bar "setViewControllers:animated:"
@@ -106,26 +102,26 @@
            window (objc-rt/msg-send :pointer hook "window")]
        (objc-rt/msg-send :void window "setRootViewController:" :pointer tab-bar))
      (swap! app-state assoc
-            :tab-bar  tab-bar
-            :map-vc   map-vc
-            :info-vc  info-vc
-            :map-nav  map-nav
-            :info-nav info-nav))))
+            :tab-bar tab-bar
+            :map-vc  map-vc
+            :info-vc info-vc))))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; Map view
 ;; ─────────────────────────────────────────────────────────────────────────────
 
 (defn install-map-view!
-  "Creates a full-screen MKMapView in the Map tab, enables the blue
+  "Creates an MKMapView filling the Map tab's view, enables the blue
   user-location dot, and centers on Apple HQ as a placeholder."
   []
   (on-main
    (let [map-vc (:map-vc @app-state)
          root-v (objc-rt/msg-send :pointer map-vc "view")
          map-v  (new-instance "MKMapView")
-         w      (m/screen-width)
-         h      (m/screen-height)]
+         ;; Use parent view bounds — not raw screen size — so the map
+         ;; respects the space the UITabBarController allocates.
+         w      (ffi/call "grease_get_frame_w" :float64 :pointer root-v)
+         h      (ffi/call "grease_get_frame_h" :float64 :pointer root-v)]
      (ui/set-frame! map-v 0.0 0.0 w h)
      ;; UIViewAutoresizingFlexibleWidth | FlexibleHeight = 2 | 16 = 18
      (objc-rt/msg-send :void map-v "setAutoresizingMask:" :int64 18)
@@ -140,17 +136,18 @@
 ;; ─────────────────────────────────────────────────────────────────────────────
 
 (defn- enable-map-follow!
-  "Switches the MKMapView to MKUserTrackingModeFollow on first GPS fix."
+  "Switches the MKMapView to MKUserTrackingModeFollow on first GPS fix.
+  Safe to call from any thread, including the location delegate's main thread."
   []
   (when-let [mv (:map-view @app-state)]
-    (on-main
-     (objc-rt/msg-send :void mv "setUserTrackingMode:animated:"
-                       :int64 1 :int8 1))))
+    (m/follow-user! mv)))
 
 (defn- on-location
   "Called by demo-app.location/start! with each new CLLocation pointer."
   [loc]
-  (when (nil? @loc/last-location) (enable-map-follow!))
+  (when-not @map-following?
+    (enable-map-follow!)
+    (reset! map-following? true))
   (info/update! (:info-labels @app-state) loc))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
