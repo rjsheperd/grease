@@ -66,7 +66,8 @@
 (defn- make-tab-item!
   "Creates a UITabBarItem with a text title, no image, and the given tag."
   [title tag]
-  (objc-rt/msg-send :pointer (get-class "UITabBarItem")
+  (objc-rt/msg-send :pointer
+                    (objc-rt/msg-send :pointer (get-class "UITabBarItem") "alloc")
                     "initWithTitle:image:tag:"
                     :pointer (f/->nsstring title)
                     :pointer (f/null-ptr)
@@ -89,9 +90,11 @@
   (on-main
    (let [map-vc   (make-plain-vc! "systemBackgroundColor")
          info-vc  (make-plain-vc! "systemGroupedBackgroundColor")
-         map-nav  (objc-rt/msg-send :pointer (get-class "UINavigationController")
+         map-nav  (objc-rt/msg-send :pointer
+                                    (objc-rt/msg-send :pointer (get-class "UINavigationController") "alloc")
                                     "initWithRootViewController:" :pointer map-vc)
-         info-nav (objc-rt/msg-send :pointer (get-class "UINavigationController")
+         info-nav (objc-rt/msg-send :pointer
+                                    (objc-rt/msg-send :pointer (get-class "UINavigationController") "alloc")
                                     "initWithRootViewController:" :pointer info-vc)
          tab-bar  (new-instance "UITabBarController")
          vcs      (f/->nsarray [map-nav info-nav])]

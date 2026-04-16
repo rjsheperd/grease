@@ -48,17 +48,17 @@
   manager in @mgr-state to prevent ARC collection."
   [on-location-fn]
   (on-main
-   (let [mgr (ios/make "CLLocationManager" "init")]
+   (let [mgr (ios/make "CLLocationManager" "new")]
      (ios/call mgr :request-when-in-use-authorization)
      (ios/call mgr "setDelegate:"
                {:location-manager-did-update-locations
-                (fn [_mgr locs]
+                (fn [_self _cmd _mgr locs]
                   (let [loc (last (f/nsarray->vec locs))]
                     (reset! last-location loc)
                     (on-location-fn loc)))
 
                 :location-manager-did-fail-with-error
-                (fn [_mgr err]
+                (fn [_self _cmd _mgr err]
                   (println "CLLocation error:"
                            (f/nsstring->str
                             (objc-rt/msg-send :pointer err
