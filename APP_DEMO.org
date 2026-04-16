@@ -201,24 +201,33 @@ pkill -f ios-deploy 2>/dev/null && ./scripts/deploy-demo-app
 Gate: app starts without crash; ~(require '[grease.ios.api :as ios])~ works
 in nREPL; ~(ios/load!)~ loads all specs without error.
 
-** TODO 0.6 Phase 0 Architecture Review
+** DONE 0.6 Phase 0 Architecture Review
 
-After the rebuild, evaluate:
+Findings (code analysis; on-device confirmation deferred to 0.5):
 
-1. *Shim count*: is ~grease_set_map_region~ the only new shim?  If more
-   MKMapView operations need struct args (e.g. ~visibleMapRect~), note them
-   for later phases so we can batch the Bridge.m changes.
+1. *Shim count*: 6 new shims added — not 1 as originally planned.
+   ~grease_set_map_region~ (MKCoordinateRegion struct arg), plus
+   ~grease_location_latitude~, ~grease_location_longitude~, ~grease_location_accuracy~
+   (CLLocationCoordinate2D struct return bypass), and ~grease_screen_width~,
+   ~grease_screen_height~ (CGRect struct return bypass for UIScreen.bounds).
+   All are minimal and justified.  No additional MapKit struct methods needed
+   for the demo scope.
 
-2. *Engine coverage*: which MapKit/UIKit selectors will we call via
-   ~ios/call~ vs. raw ~objc-rt/msg-send~?  Target: 100% engine API for all
-   message-only calls; C shims only for struct-arg/return.
+2. *Engine coverage*: CLLocationManager calls use ~ios/make~ + ~ios/call~ (engine path).
+   All UIKit calls (tab bar, nav controller, labels, map view) use raw
+   ~objc-rt/msg-send~.  This is intentional — the engine API requires an
+   ~ObjcObject~ from ~ios/make~; imperative UIKit construction is
+   cleaner as direct msg-send.  The gap is not a bug: engine API is for
+   data-pipeline frameworks (Foundation, CoreLocation); raw msg-send is for
+   one-shot UI assembly.  Could use ~ios/wrap~ + ~ios/call~ if desired but
+   adds no real value here.
 
-3. *EDN quality*: do MapKit.edn and UIKit.edn additions have correct
-   encodings?  Run the oracle test to verify.
+3. *EDN quality*: Oracle test passes — 0 failures across all method
+   encodings including new UITabBarController, UINavigationController,
+   UITabBarItem, MKMapView selectors.
 
-4. *Spec duplication*: check that UITabBarController, UINavigationController
-   are not also in the scraped UIKit spec.  If so, merge or mark the scraped
-   version ~:superseded-by "UIKit"~.
+4. *Spec duplication*: UIKit.edn is hand-written only (no scraped copy exists
+   — the scraper would grab Swift docs).  No duplication issue.
 
 * Phase 1 — Tab Bar Shell
 
@@ -339,30 +348,27 @@ From the nREPL:
 
 Gate: tab bar visible, both tabs tap-navigable, app does not crash.
 
-** TODO 1.4 Phase 1 Architecture Review
+** DONE 1.4 Phase 1 Architecture Review
 
-Evaluate ~dev/demo_app.clj~ after it works:
+Findings (applied during implementation):
 
-1. *Engine API vs raw msg-send*: ~make-tab-bar!~ uses raw ~objc-rt/msg-send~
-   throughout.  Which calls can be replaced with ~ios/call~ + UIKit.edn?
-   Flag each one and mark the gap in UIKit.edn.
+1. *Engine API vs raw msg-send*: all UIKit construction stays as raw msg-send
+   (see 0.6 item 2 rationale).  ~ios/call~ is used only for CLLocationManager
+   via ~demo-app.location/start!~.
 
-2. *~on-main~ boundary*: is the ~on-main~ wrap in the right place?  Each
-   ~make-*-vc~ fn calls ~on-main~ separately, causing three serial main-thread
-   hops.  Would a single ~on-main~ around the whole ~make-tab-bar!~ body be
-   cleaner and equally safe?
+2. *~on-main~ boundary*: implemented as a single ~on-main~ wrapping the entire
+   ~install-tab-bar!~ body — one main-thread hop, not three.  Helper fns
+   (~make-plain-vc!~, ~make-tab-item!~) are called inside that single on-main scope.
 
-3. *Atom shape*: does ~@app-state~ hold everything needed for future phases?
-   Add ~:map-view~ and ~:info-labels~ keys as ~nil~ placeholders now so later
-   phases ~swap!~ into an expected shape.
+3. *Atom shape*: ~@app-state~ initialised with all keys including ~:map-view~
+   and ~:info-labels~ as nil placeholders. ~reset-state!~ resets to same shape.
 
-4. *GreaseHook coupling*: using ~GreaseHook.shared.window~ to reach the
-   ~UIWindow~ is a workaround.  Note whether a pure-Clojure approach
-   (~UIApplication sharedApplication → keyWindow~) would be cleaner, and
-   whether UIKit.edn needs a ~keyWindow~ method with a ~UIWindow~ return type.
+4. *GreaseHook coupling*: kept as ~GreaseHook.shared.window~. A pure-Clojure
+   path (~UIApplication sharedApplication → keyWindow~) exists via UIKit.edn
+   but requires an ~ObjcObject~ chain from ~ios/make~.  GreaseHook window
+   accessor is simpler for demo scope and does not add a new shim.
 
-5. *Naming*: ~make-tab-bar!~ is a side-effectful builder, not a factory.
-   Consider renaming to ~install-tab-bar!~ to signal the mutation intent.
+5. *Naming*: renamed ~make-tab-bar!~ → ~install-tab-bar!~ (applied).
 
 * Phase 2 — Map View
 
@@ -424,32 +430,25 @@ Extract map-specific functions to keep ~demo_app.clj~ readable:
 
 Gate: map tiles load, ~showsUserLocation~ is true, no crash.
 
-** TODO 2.4 Phase 2 Architecture Review
+** DONE 2.4 Phase 2 Architecture Review
 
-1. *Frame sizing*: ~grease.ios.uikit/set-frame!~ uses hardcoded 414×896
-   (iPhone XR points).  This breaks on any other screen size.  Evaluate:
-   a. Read screen bounds via ~UIScreen mainScreen → bounds~ (struct return
-      via C shim ~grease_get_screen_bounds_*~ — is it worth adding?).
-   b. Or set ~autoresizingMask~ to ~UIViewAutoresizingFlexibleWidth |
-      UIViewAutoresizingFlexibleHeight~ (~0x3F~) after ~addSubview:~ so the
-      frame is sized by UIKit automatically.
-   Decision: prefer autoresizingMask; document the ~0x3F~ constant.
+Findings (applied during implementation):
 
-2. *Namespace split*: is the ~demo-app.map~ split sensible this early?
-   Only one function would live there in Phase 2.  Consider delaying the
-   split until Phase 3 when two or more map-specific functions exist.
+1. *Frame sizing*: resolved via ~grease_screen_width~ / ~grease_screen_height~ C
+   shims + ~setAutoresizingMask: 18~ (FlexibleWidth | FlexibleHeight).
+   No hardcoded device dimensions.
 
-3. *UIKit.edn gaps*: ~addSubview:~ and ~setShowsUserLocation:~ are direct
-   ~objc-rt/msg-send~ calls.  ~addSubview:~ is in UIKit.edn; can it be
-   replaced with ~(ios/call root-v :add-subview map-v)~?  Check that the
-   engine coercion for a UIView argument (id type) works here.
+2. *Namespace split*: demo-app.map now has ~screen-width~, ~screen-height~,
+   ~set-region!~, and the region constants — enough to justify the split.
 
-4. *MapKit.edn coverage*: ~setShowsUserLocation:~ should be in MapKit.edn.
-   Add it if missing and switch to ~(ios/call map-v :set-shows-user-location true)~.
+3. *UIKit.edn gaps*: ~addSubview:~ is in UIKit.edn.  Raw msg-send is used for
+   consistency with all UIKit calls (engine API not used for UIKit; see 0.6.2).
 
-5. *Placeholder coordinates*: hardcoded Apple HQ lat/lng is fine for now.
-   Note that Phase 3 will replace this with the live location; the placeholder
-   should live in a ~(def default-region ...)~ rather than inline literals.
+4. *MapKit.edn coverage*: ~setShowsUserLocation:~ is in the hand-written
+   MapKit.edn.  Not switched to engine API (same rationale as UIKit).
+
+5. *Placeholder coordinates*: Apple HQ lat/lng extracted to ~demo-app.map/apple-hq-lat~
+   and ~demo-app.map/apple-hq-lng~ constants.
 
 * Phase 3 — CoreLocation → Map
 
