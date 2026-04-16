@@ -311,18 +311,17 @@ void *grease_main_queue(void) {
 // =============================================================================
 // UIKit frame / geometry shims
 //
-// CGRect, CGPoint, and CGSize are C structs.  Returning structs through a
-// void* FFI call is architecture-specific and clj-libffi does not support
-// struct returns.  These scalar wrappers decompose the structs into doubles
-// so Clojure can read / write frames without any struct marshaling.
+// CGRect, CGPoint, and CGSize are C structs.  libffi on aarch64-apple-ios
+// incorrectly routes struct returns through a hidden stret pointer (x8),
+// shifting receiver/selector and crashing objc_msgSend.  These shims decompose
+// struct RETURNS into scalar doubles.
+//
+// Struct ARGS (set-frame!, set-center!) are now dispatched via
+// grease.ios.invoke/dispatch! using ffi/call-ptr with composite ffi_types, so
+// grease_set_frame and grease_set_center have been removed.
 //
 // All functions must be invoked on the main thread (UIKit requirement).
 // =============================================================================
-
-void grease_set_frame(void *view, double x, double y, double w, double h) {
-    UIView *v = (__bridge UIView *)view;
-    v.frame = CGRectMake(x, y, w, h);
-}
 
 double grease_get_frame_x(void *view) {
     return ((__bridge UIView *)view).frame.origin.x;
@@ -340,11 +339,6 @@ double grease_get_frame_h(void *view) {
     return ((__bridge UIView *)view).frame.size.height;
 }
 
-void grease_set_center(void *view, double cx, double cy) {
-    UIView *v = (__bridge UIView *)view;
-    v.center = CGPointMake(cx, cy);
-}
-
 double grease_get_center_x(void *view) {
     return ((__bridge UIView *)view).center.x;
 }
@@ -354,35 +348,19 @@ double grease_get_center_y(void *view) {
 }
 
 // =============================================================================
-// MapKit region shim
+// CLLocation scalar accessors
 //
-// setRegion:animated: takes an MKCoordinateRegion struct by value (32 bytes).
-// This scalar shim accepts the four component doubles directly, avoiding the
-// struct-arg FFI problem.  Must be called on the main thread.
+// CLLocation.coordinate returns CLLocationCoordinate2D — a struct.
+// libffi on aarch64-apple-ios incorrectly uses a hidden stret pointer (x8) for
+// composite return types, shifting receiver/selector and crashing objc_msgSend.
+// These shims decompose the struct return into scalar doubles.
+//
+// setRegion:animated: (MKCoordinateRegion struct arg) has been moved to
+// grease.ios.invoke/dispatch! via ffi/call-ptr — no C shim needed.
 // =============================================================================
 
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
-
-void grease_set_map_region(void *mapView,
-                           double center_lat, double center_lng,
-                           double span_lat_delta, double span_lng_delta,
-                           int animated) {
-    MKMapView *mv = (__bridge MKMapView *)mapView;
-    MKCoordinateRegion r =
-        MKCoordinateRegionMake(
-            CLLocationCoordinate2DMake(center_lat, center_lng),
-            MKCoordinateSpanMake(span_lat_delta, span_lng_delta));
-    [mv setRegion:r animated:(BOOL)animated];
-}
-
-// =============================================================================
-// CLLocation scalar accessors
-//
-// CLLocation.coordinate returns CLLocationCoordinate2D — a struct.
-// These scalar shims decompose it into doubles until invoke/dispatch! struct
-// returns are validated on device (Phase 10.2.4 on-device test, Phase 3.4 review).
-// =============================================================================
 
 double grease_location_latitude(void *location) {
     return ((__bridge CLLocation *)location).coordinate.latitude;
@@ -390,10 +368,6 @@ double grease_location_latitude(void *location) {
 
 double grease_location_longitude(void *location) {
     return ((__bridge CLLocation *)location).coordinate.longitude;
-}
-
-double grease_location_accuracy(void *location) {
-    return ((__bridge CLLocation *)location).horizontalAccuracy;
 }
 
 // =============================================================================

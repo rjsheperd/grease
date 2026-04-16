@@ -12,7 +12,7 @@
     (on-main (subviews (root-view)))  ;; => vec of UIView pointers
     (on-main (describe-view (root-view))) ;; => {:class ... :frame ...}
 
-    ;; Read / write frames (no CGRect struct marshaling needed)
+    ;; Read / write frames
     (on-main (get-frame (root-view)))                  ;; => {:x 0.0 :y 0.0 ...}
     (on-main (set-frame! some-view 0 100 300 44))
 
@@ -75,15 +75,19 @@
    :w (ffi/call "grease_get_frame_w" :float64 :pointer view)
    :h (ffi/call "grease_get_frame_h" :float64 :pointer view)})
 
+(def ^:private set-frame-spec
+  {:selector "setFrame:"
+   :encoding "v@:{CGRect={CGPoint=dd}{CGSize=dd}}"
+   :args     [{:name "frame" :type "CGRect"}]
+   :return   "void"})
+
 (defn set-frame!
   "Sets the frame of view to {x y w h}. Must be called on the main thread."
   [view x y w h]
-  (ffi/call "grease_set_frame" :void
-            :pointer view
-            :float64 (double x)
-            :float64 (double y)
-            :float64 (double w)
-            :float64 (double h)))
+  ((requiring-resolve 'grease.ios.invoke/dispatch!)
+   view "setFrame:" set-frame-spec
+   [{:origin {:x (double x) :y (double y)}
+     :size   {:width (double w) :height (double h)}}]))
 
 (defn get-center
   "Returns the center of view as {:cx :cy}. Must be on main thread."
@@ -91,13 +95,18 @@
   {:cx (ffi/call "grease_get_center_x" :float64 :pointer view)
    :cy (ffi/call "grease_get_center_y" :float64 :pointer view)})
 
+(def ^:private set-center-spec
+  {:selector "setCenter:"
+   :encoding "v@:{CGPoint=dd}"
+   :args     [{:name "center" :type "CGPoint"}]
+   :return   "void"})
+
 (defn set-center!
   "Sets the center of view to {cx cy}. Must be called on the main thread."
   [view cx cy]
-  (ffi/call "grease_set_center" :void
-            :pointer view
-            :float64 (double cx)
-            :float64 (double cy)))
+  ((requiring-resolve 'grease.ios.invoke/dispatch!)
+   view "setCenter:" set-center-spec
+   [{:x (double cx) :y (double cy)}]))
 
 ;; =============================================================================
 ;; UI element creation helpers
