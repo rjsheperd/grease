@@ -59,11 +59,50 @@
   [encoding]
   (get encoding-char->kw (first encoding) :pointer))
 
+(defn- encoding-tokens
+  "Splits an ObjC type encoding string into individual type tokens.
+  Each token is either a single-character primitive (`d`, `B`, `@`, …) or a
+  brace-delimited struct token (`{StructName=…}`).  Struct tokens may nest.
+
+  This is necessary because the naïve char-by-char split breaks for any
+  method that takes or returns a struct argument: the struct encoding
+  `{MKCoordinateRegion={CLLocationCoordinate2D=dd}{MKCoordinateSpan=dd}}`
+  spans many characters, so char-by-char parsing produces one token per
+  character instead of one token for the whole struct."
+  [encoding]
+  (loop [s (seq encoding) acc [] depth 0 cur []]
+    (if-not s
+      (cond-> acc (seq cur) (conj (apply str cur)))
+      (let [ch (first s)]
+        (cond
+          ;; entering a struct — start accumulating, bump depth
+          (and (= ch \{) (zero? depth))
+          (recur (next s) acc 1 [ch])
+
+          ;; inside a struct — always accumulate
+          (pos? depth)
+          (let [new-depth (cond (= ch \{) (inc depth)
+                                (= ch \}) (dec depth)
+                                :else depth)]
+            (if (zero? new-depth)
+              ;; closing brace completes the struct token
+              (recur (next s) (conj acc (apply str (conj cur ch))) 0 [])
+              (recur (next s) acc new-depth (conj cur ch))))
+
+          ;; outside a struct — each char is its own token
+          :else
+          (recur (next s) (conj acc (str ch)) 0 []))))))
+
 (defn- arg-kws
   "Returns a vector of msg-send type keywords for each argument in the encoding.
-  Skips the first three chars: return type, self (`@`), and cmd (`:`)."
+  Skips the first three tokens: return type, self (`@`), and cmd (`:`).
+  Struct tokens (`{…}`) map to `:pointer`; all others map via [[encoding-char->kw]]."
   [encoding]
-  (mapv #(get encoding-char->kw % :pointer) (drop 3 encoding)))
+  (mapv (fn [tok]
+          (if (= (first tok) \{)
+            :pointer
+            (get encoding-char->kw (first tok) :pointer)))
+        (drop 3 (encoding-tokens encoding))))
 
 (defn parse-encoding
   "Parses an ObjC type encoding string into a dispatch map.
