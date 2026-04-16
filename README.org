@@ -272,6 +272,33 @@ clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' \
 
 The nREPL runs under babashka SCI, not standard JVM Clojure.
 
+** Emacs / CIDER
+
+=.dir-locals.el= at the project root pre-configures CIDER so that it connects
+without trying to inject =cider-nrepl= middleware (which the SCI nREPL does not
+support).
+
+*Connect* with =M-x cider-connect= — "iOS Device" appears first in the
+completion list so pressing =RET= twice connects immediately.  Select "iOS
+Simulator" for a simulator session.
+
+Alternatively, =deps.edn= provides named aliases that work from the command line
+or via =cider-jack-in= (the alias runs =nrepl.cmdline --connect= rather than
+starting a new server):
+
+#+begin_src bash
+clj -M:repl/sim     # iOS Simulator  → localhost:23456
+clj -M:repl/device  # physical device → 192.168.0.111:23456
+#+end_src
+
+The first time Emacs visits a file in this directory it will ask whether to
+allow the directory-local variables — answer =!= to approve them permanently
+for the project.
+
+Caveats: =cider-doc=, =cider-test=, and =cider-inspect= require =cider-nrepl=
+ops that are not available in the SCI runtime.  Interactive eval, completion
+from SCI's namespace index, and =cider-macroexpand= all work normally.
+
 * ObjC Interop
 
 The =grease.ios.objc= namespace is pre-loaded at app startup and provides:
