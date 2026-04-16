@@ -82,15 +82,17 @@
         (is (contains? sels "captureOutput:didDropSampleBuffer:fromConnection:"))))))
 
 (deftest ^:parallel avauthorizationstatus-enum-test
+  ;; Enum :name values in AVFoundation.edn use short camelCase (e.g. "notDetermined"),
+  ;; so :camel->kebab-keyword produces :not-determined, not :av-authorization-status-not-determined.
   (testing "AVAuthorizationStatus enum values are accessible"
-    (is (= 0 (registry/enum-raw-for "AVAuthorizationStatus" :av-authorization-status-not-determined)))
-    (is (= 1 (registry/enum-raw-for "AVAuthorizationStatus" :av-authorization-status-restricted)))
-    (is (= 2 (registry/enum-raw-for "AVAuthorizationStatus" :av-authorization-status-denied)))
-    (is (= 3 (registry/enum-raw-for "AVAuthorizationStatus" :av-authorization-status-authorized)))))
+    (is (= 0 (registry/enum-raw-for "AVAuthorizationStatus" :not-determined)))
+    (is (= 1 (registry/enum-raw-for "AVAuthorizationStatus" :restricted)))
+    (is (= 2 (registry/enum-raw-for "AVAuthorizationStatus" :denied)))
+    (is (= 3 (registry/enum-raw-for "AVAuthorizationStatus" :authorized)))))
 
 (deftest ^:parallel avauthorizationstatus-via-api-enum-test
   (testing "api/enum returns raw int for AVAuthorizationStatus"
-    (is (= 3 (api/enum "AVAuthorizationStatus" :av-authorization-status-authorized)))))
+    (is (= 3 (api/enum "AVAuthorizationStatus" :authorized)))))
 
 ;; =============================================================================
 ;; Method specs — encoding and return types

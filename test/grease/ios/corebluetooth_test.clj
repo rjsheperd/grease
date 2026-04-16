@@ -70,17 +70,19 @@
 ;; =============================================================================
 
 (deftest ^:parallel cbmanagerstate-enum-test
+  ;; Enum :name values in CoreBluetooth.edn use short camelCase (e.g. "poweredOn"),
+  ;; so :camel->kebab-keyword produces :powered-on, not :cb-manager-state-powered-on.
   (testing "CBManagerState enum values match oracle integers"
-    (is (= 0 (registry/enum-raw-for "CBManagerState" :cb-manager-state-unknown)))
-    (is (= 1 (registry/enum-raw-for "CBManagerState" :cb-manager-state-resetting)))
-    (is (= 2 (registry/enum-raw-for "CBManagerState" :cb-manager-state-unsupported)))
-    (is (= 3 (registry/enum-raw-for "CBManagerState" :cb-manager-state-unauthorized)))
-    (is (= 4 (registry/enum-raw-for "CBManagerState" :cb-manager-state-powered-off)))
-    (is (= 5 (registry/enum-raw-for "CBManagerState" :cb-manager-state-powered-on)))))
+    (is (= 0 (registry/enum-raw-for "CBManagerState" :unknown)))
+    (is (= 1 (registry/enum-raw-for "CBManagerState" :resetting)))
+    (is (= 2 (registry/enum-raw-for "CBManagerState" :unsupported)))
+    (is (= 3 (registry/enum-raw-for "CBManagerState" :unauthorized)))
+    (is (= 4 (registry/enum-raw-for "CBManagerState" :powered-off)))
+    (is (= 5 (registry/enum-raw-for "CBManagerState" :powered-on)))))
 
 (deftest ^:parallel cbmanagerstate-via-api-test
   (testing "api/enum resolves CBManagerState powered-on"
-    (is (= 5 (api/enum "CBManagerState" :cb-manager-state-powered-on)))))
+    (is (= 5 (api/enum "CBManagerState" :powered-on)))))
 
 ;; =============================================================================
 ;; initWithDelegate:queue: — :delegate pattern arg
