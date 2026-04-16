@@ -20,8 +20,7 @@
     (on-main
       (let [lbl (new-label \"Hello from REPL\")]
         (add-subview! (root-view) lbl)))"
-  (:require [com.phronemophobic.clj-libffi :as ffi]
-            [com.phronemophobic.grease :as grease]
+  (:require [com.phronemophobic.grease :as grease]
             [grease.ios.foundation :as f]
             [grease.ios.objc :as objc-rt]))
 
@@ -49,31 +48,26 @@
   [view]
   (f/nsarray->vec (objc-rt/msg-send :pointer view "subviews")))
 
-(defn describe-view
-  "Returns a map describing view: its ObjC class name, frame, and subview count."
-  [view]
-  {:class (f/nsstring->str
-           (objc-rt/msg-send :pointer
-                             (objc-rt/msg-send :pointer view "class")
-                             "description"))
-   :frame {:x (ffi/call "grease_get_frame_x" :float64 :pointer view)
-           :y (ffi/call "grease_get_frame_y" :float64 :pointer view)
-           :w (ffi/call "grease_get_frame_w" :float64 :pointer view)
-           :h (ffi/call "grease_get_frame_h" :float64 :pointer view)}
-   :subview-count (count (subviews view))})
+;; =============================================================================
+;; Frame / geometry — struct-return/arg dispatch via ffi/call-ptr
+;; =============================================================================
 
-;; =============================================================================
-;; Frame / geometry — uses C shims to avoid CGRect struct marshaling
-;; =============================================================================
+(def ^:private frame-get-spec
+  {:selector "frame"
+   :encoding "{CGRect={CGPoint=dd}{CGSize=dd}}@:"
+   :args     []
+   :return   "CGRect"})
 
 (defn get-frame
-  "Returns the frame of view as a map {:x :y :w :h}.
+  "Returns the frame of view as {:x :y :w :h}.
   Must be called on the main thread."
   [view]
-  {:x (ffi/call "grease_get_frame_x" :float64 :pointer view)
-   :y (ffi/call "grease_get_frame_y" :float64 :pointer view)
-   :w (ffi/call "grease_get_frame_w" :float64 :pointer view)
-   :h (ffi/call "grease_get_frame_h" :float64 :pointer view)})
+  (let [r ((requiring-resolve 'grease.ios.invoke/dispatch!)
+           view "frame" frame-get-spec [])]
+    {:x (get (get r :origin) :x)
+     :y (get (get r :origin) :y)
+     :w (get (get r :size) :width)
+     :h (get (get r :size) :height)}))
 
 (def ^:private set-frame-spec
   {:selector "setFrame:"
@@ -89,11 +83,18 @@
    [{:origin {:x (double x) :y (double y)}
      :size   {:width (double w) :height (double h)}}]))
 
+(def ^:private center-get-spec
+  {:selector "center"
+   :encoding "{CGPoint=dd}@:"
+   :args     []
+   :return   "CGPoint"})
+
 (defn get-center
   "Returns the center of view as {:cx :cy}. Must be on main thread."
   [view]
-  {:cx (ffi/call "grease_get_center_x" :float64 :pointer view)
-   :cy (ffi/call "grease_get_center_y" :float64 :pointer view)})
+  (let [pt ((requiring-resolve 'grease.ios.invoke/dispatch!)
+            view "center" center-get-spec [])]
+    {:cx (get pt :x) :cy (get pt :y)}))
 
 (def ^:private set-center-spec
   {:selector "setCenter:"
@@ -107,6 +108,16 @@
   ((requiring-resolve 'grease.ios.invoke/dispatch!)
    view "setCenter:" set-center-spec
    [{:x (double cx) :y (double cy)}]))
+
+(defn describe-view
+  "Returns a map describing view: its ObjC class name, frame, and subview count."
+  [view]
+  {:class (f/nsstring->str
+           (objc-rt/msg-send :pointer
+                             (objc-rt/msg-send :pointer view "class")
+                             "description"))
+   :frame (get-frame view)
+   :subview-count (count (subviews view))})
 
 ;; =============================================================================
 ;; UI element creation helpers

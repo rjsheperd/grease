@@ -4,10 +4,11 @@
 ;; start! accepts an on-location-fn callback (fn [loc]) to avoid coupling this
 ;; namespace to demo_app.clj's UI atoms.
 ;;
-;; CLLocationCoordinate2D is an ARM64 HFA (2 doubles in d0/d1).  libffi
-;; incorrectly prepends a hidden stret pointer when used as a composite return
-;; type, shifting receiver/selector and crashing objc_msgSend.  Scalar
-;; C shims (grease_location_latitude/longitude) are used instead.
+;; CLLocationCoordinate2D is an ARM64 HFA (2 doubles in d0/d1).  The fixed
+;; clj-libffi fork (rjsheperd/clj-libffi) zeroes :size/:alignment in
+;; struct-def->ffi-type so ffi_prep_cif triggers initialize_aggregate, selecting
+;; the correct HFA register convention.  coordinate is dispatched via
+;; grease.ios.invoke/dispatch! → ffi/call-ptr — no C shim needed.
 ;;
 ;; Delegate pattern: uses defclass + raw msg-send setDelegate: (NOT ios/call
 ;; with a delegate map).  The ios/call / patterns/wrap-delegate / make-imp path
@@ -17,10 +18,9 @@
 ;; still live.
 
 (ns demo-app.location
-  (:require [com.phronemophobic.clj-libffi :as ffi]
-            [grease.ios.foundation         :as f]
-            [grease.ios.objc               :as objc-rt]
-            [grease.ios.repl               :refer [on-main]]))
+  (:require [grease.ios.foundation :as f]
+            [grease.ios.objc       :as objc-rt]
+            [grease.ios.repl       :refer [on-main]]))
 
 ;; Latest CLLocation pointer, or nil before the first GPS fix.
 ;; WARNING: raw ObjC pointer — only safe to dereference from within the GPS
@@ -41,6 +41,34 @@
 ;; so start! can supply a new fn without re-registering the ObjC class.
 (defonce ^:private on-location-fn-atom (atom (fn [_] nil)))
 
+;; ─────────────────────────────────────────────────────────────────────────────
+;; CLLocation accessors — struct-return dispatch via ffi/call-ptr
+;; ─────────────────────────────────────────────────────────────────────────────
+
+(def ^:private coordinate-spec
+  {:selector "coordinate"
+   :encoding "{CLLocationCoordinate2D=dd}@:"
+   :args     []
+   :return   "CLLocationCoordinate2D"})
+
+(defn coordinate
+  "Returns {:latitude double :longitude double} from a CLLocation pointer."
+  [loc]
+  (let [c ((requiring-resolve 'grease.ios.invoke/dispatch!)
+           loc "coordinate" coordinate-spec [])]
+    {:latitude  (get c :latitude)
+     :longitude (get c :longitude)}))
+
+(defn latitude
+  "Returns the latitude of a CLLocation pointer as a double."
+  [loc]
+  (:latitude (coordinate loc)))
+
+(defn longitude
+  "Returns the longitude of a CLLocation pointer as a double."
+  [loc]
+  (:longitude (coordinate loc)))
+
 ;; ObjC delegate class — registered once per process lifetime.
 ;; Re-registering the same class name crashes with a duplicate-class error.
 ;; The sentinel defonce lets this file be re-evaluated safely; defclass is
@@ -54,12 +82,11 @@
       ;; Extract scalar values while loc is still guaranteed live (inside
       ;; the GPS callback, before ARC can release it).  Store both the raw
       ;; pointer (@last-location) and a safe Clojure map (@last-coord).
-      (let [loc (last (f/nsarray->vec locs))
-            lat (ffi/call "grease_location_latitude"  :float64 :pointer loc)
-            lng (ffi/call "grease_location_longitude" :float64 :pointer loc)
-            acc (objc-rt/msg-send :float64 loc "horizontalAccuracy")]
+      (let [loc   (last (f/nsarray->vec locs))
+            coord (coordinate loc)
+            acc   (objc-rt/msg-send :float64 loc "horizontalAccuracy")]
         (reset! last-location loc)
-        (reset! last-coord {:latitude lat :longitude lng :accuracy acc})
+        (reset! last-coord (assoc coord :accuracy acc))
         (@on-location-fn-atom loc)))
     "locationManager:didFailWithError:" "v@:@@"
     (fn [_self _cmd _mgr err]
@@ -67,27 +94,6 @@
                (f/nsstring->str
                 (objc-rt/msg-send :pointer err "localizedDescription")))))
   (reset! _delegate-registered true))
-
-;; ─────────────────────────────────────────────────────────────────────────────
-;; CLLocation accessors — C shims bypass ARM64 HFA struct-return issues
-;; ─────────────────────────────────────────────────────────────────────────────
-
-(defn latitude
-  "Returns the latitude of a CLLocation pointer as a double.
-  Uses grease_location_latitude C shim (ARM64 HFA struct return bypass)."
-  [loc]
-  (ffi/call "grease_location_latitude" :float64 :pointer loc))
-
-(defn longitude
-  "Returns the longitude of a CLLocation pointer as a double.
-  Uses grease_location_longitude C shim (ARM64 HFA struct return bypass)."
-  [loc]
-  (ffi/call "grease_location_longitude" :float64 :pointer loc))
-
-(defn coordinate
-  "Returns {:latitude double :longitude double} from a CLLocation pointer."
-  [loc]
-  {:latitude (latitude loc) :longitude (longitude loc)})
 
 (defn accuracy
   "Returns the horizontal accuracy of a CLLocation pointer in metres."

@@ -308,67 +308,8 @@ void *grease_main_queue(void) {
     return (__bridge void *)dispatch_get_main_queue();
 }
 
-// =============================================================================
-// UIKit frame / geometry shims
-//
-// CGRect, CGPoint, and CGSize are C structs.  libffi on aarch64-apple-ios
-// incorrectly routes struct returns through a hidden stret pointer (x8),
-// shifting receiver/selector and crashing objc_msgSend.  These shims decompose
-// struct RETURNS into scalar doubles.
-//
-// Struct ARGS (set-frame!, set-center!) are now dispatched via
-// grease.ios.invoke/dispatch! using ffi/call-ptr with composite ffi_types, so
-// grease_set_frame and grease_set_center have been removed.
-//
-// All functions must be invoked on the main thread (UIKit requirement).
-// =============================================================================
-
-double grease_get_frame_x(void *view) {
-    return ((__bridge UIView *)view).frame.origin.x;
-}
-
-double grease_get_frame_y(void *view) {
-    return ((__bridge UIView *)view).frame.origin.y;
-}
-
-double grease_get_frame_w(void *view) {
-    return ((__bridge UIView *)view).frame.size.width;
-}
-
-double grease_get_frame_h(void *view) {
-    return ((__bridge UIView *)view).frame.size.height;
-}
-
-double grease_get_center_x(void *view) {
-    return ((__bridge UIView *)view).center.x;
-}
-
-double grease_get_center_y(void *view) {
-    return ((__bridge UIView *)view).center.y;
-}
-
-// =============================================================================
-// CLLocation scalar accessors
-//
-// CLLocation.coordinate returns CLLocationCoordinate2D — a struct.
-// libffi on aarch64-apple-ios incorrectly uses a hidden stret pointer (x8) for
-// composite return types, shifting receiver/selector and crashing objc_msgSend.
-// These shims decompose the struct return into scalar doubles.
-//
-// setRegion:animated: (MKCoordinateRegion struct arg) has been moved to
-// grease.ios.invoke/dispatch! via ffi/call-ptr — no C shim needed.
-// =============================================================================
-
 #import <MapKit/MapKit.h>
 #import <CoreLocation/CoreLocation.h>
-
-double grease_location_latitude(void *location) {
-    return ((__bridge CLLocation *)location).coordinate.latitude;
-}
-
-double grease_location_longitude(void *location) {
-    return ((__bridge CLLocation *)location).coordinate.longitude;
-}
 
 // =============================================================================
 // MKCircle overlay shim
@@ -421,21 +362,6 @@ void grease_map_add_circle(void *mapView,
     CLLocationCoordinate2D centre = CLLocationCoordinate2DMake(lat, lng);
     MKCircle *circle = [MKCircle circleWithCenterCoordinate:centre radius:radius_meters];
     [mv addOverlay:circle level:MKOverlayLevelAboveRoads];
-}
-
-// =============================================================================
-// UIScreen bounds accessors
-//
-// UIScreen.mainScreen.bounds returns CGRect — a struct.
-// These scalar accessors let Clojure read the screen size without struct FFI.
-// =============================================================================
-
-double grease_screen_width(void) {
-    return [UIScreen mainScreen].bounds.size.width;
-}
-
-double grease_screen_height(void) {
-    return [UIScreen mainScreen].bounds.size.height;
 }
 
 void *grease_class_method_names(void *cls) {

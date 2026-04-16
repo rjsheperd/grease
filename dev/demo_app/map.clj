@@ -1,11 +1,9 @@
 ;; dev/demo_app/map.clj — MKMapView helpers for the demo app.
 ;;
-;; setRegion:animated: passes MKCoordinateRegion by value (32 bytes, 4 doubles).
-;; grease.ios.invoke/dispatch! handles this via ffi/call-ptr with a composite
-;; ffi_type — libffi generates correct ARM64 HFA calling code. No C shim needed.
-;;
-;; Screen size uses grease_get_frame_w/h on the parent view (avoids CGRect
-;; struct return from UIScreen.bounds and respects tab bar layout).
+;; All struct-valued ObjC calls (setRegion:animated:, UIScreen.bounds) are
+;; dispatched via grease.ios.invoke/dispatch! → ffi/call-ptr with composite
+;; ffi_type descriptors. libffi generates correct ARM64 HFA calling code for
+;; both struct args and struct returns. No C shims needed.
 
 (ns demo-app.map
   (:require [com.phronemophobic.clj-libffi :as ffi]
@@ -14,18 +12,33 @@
             [grease.ios.objc               :as objc-rt]))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
-;; Screen geometry (scalar shims — avoids CGRect struct return)
+;; Screen geometry — struct-return dispatch via ffi/call-ptr
 ;; ─────────────────────────────────────────────────────────────────────────────
 
-(defn screen-width
-  "Returns the screen width in points via grease_screen_width C shim."
+(def ^:private bounds-spec
+  {:selector "bounds"
+   :encoding "{CGRect={CGPoint=dd}{CGSize=dd}}@:"
+   :args     []
+   :return   "CGRect"})
+
+(defn- screen-bounds
+  "Returns UIScreen.mainScreen.bounds as a CGRect dtype struct."
   []
-  (ffi/call "grease_screen_width" :float64))
+  (let [screen (objc-rt/msg-send :pointer
+                                 (grease/get-objc-class "UIScreen")
+                                 "mainScreen")]
+    ((requiring-resolve 'grease.ios.invoke/dispatch!)
+     screen "bounds" bounds-spec [])))
+
+(defn screen-width
+  "Returns the screen width in points."
+  []
+  (get (get (screen-bounds) :size) :width))
 
 (defn screen-height
-  "Returns the screen height in points via grease_screen_height C shim."
+  "Returns the screen height in points."
   []
-  (ffi/call "grease_screen_height" :float64))
+  (get (get (screen-bounds) :size) :height))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; Map region — libffi composite type dispatch (no C shim)

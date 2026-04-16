@@ -64,28 +64,9 @@ void *grease_class_method_names(void *cls);
 void *grease_null_ptr(void);
 void *grease_main_queue(void);
 
-// CLLocation scalar accessors — avoids CLLocationCoordinate2D struct return via FFI.
-// Struct returns are not dispatched via invoke/dispatch! — ARM64 HFA structs (e.g.
-// CLLocationCoordinate2D, 2 doubles in d0/d1) require C shims because libffi
-// incorrectly inserts a hidden stret pointer (x8) for composite return types on
-// aarch64-apple-ios, shifting receiver/selector and crashing objc_msgSend.
-double grease_location_latitude(void *location);
-double grease_location_longitude(void *location);
-
-// UIScreen bounds accessors — avoids CGRect struct return via FFI.
-double grease_screen_width(void);
-double grease_screen_height(void);
-
-// UIKit frame / geometry shims — decompose CGRect/CGPoint struct returns into scalars.
-// All functions must be called on the main thread.
-// Note: set-frame! and set-center! now use invoke/dispatch! (struct-arg path via
-// ffi/call-ptr) so grease_set_frame and grease_set_center have been removed.
-double grease_get_frame_x(void *view);
-double grease_get_frame_y(void *view);
-double grease_get_frame_w(void *view);
-double grease_get_frame_h(void *view);
-double grease_get_center_x(void *view);
-double grease_get_center_y(void *view);
+// UIKit frame and CLLocation struct accessors are dispatched via
+// grease.ios.invoke/dispatch! → ffi/call-ptr (ARM64 HFA via libffi).
+// No C shims needed for frame, center, coordinate, or screen bounds.
 
 #ifdef __cplusplus
 }

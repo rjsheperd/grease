@@ -14,12 +14,9 @@
   - [[tech.v3.datatype.struct]]           — dt-struct type registry and inplace-new-struct
   - [[java.nio.ByteBuffer/allocateDirect]]— off-heap buffer for struct-arg packing
 
-  Struct ARGUMENTS use [[ffi/call-ptr]] with composite [[dt-struct/define-datatype!]]
-  types so libffi generates correct ARM64 HFA calling code (d0–d3 registers).
-  Struct RETURN types are NOT supported via [[ffi/call-ptr]] — libffi incorrectly
-  prepends a hidden stret pointer for composite returns on ARM64, shifting the
-  receiver/selector and crashing [[objc_msgSend]].  Methods with struct return
-  types must use C shims.
+  Struct ARGUMENTS and struct RETURN types both route through [[ffi/call-ptr]]
+  with composite [[dt-struct/define-datatype!]] descriptors so libffi generates
+  correct ARM64 HFA calling code (d0–d3 for struct args/returns).
 
   Usage:
     (invoke/dispatch! receiver \"play\" method-spec [])
@@ -225,29 +222,25 @@
   Coercion is driven by the method spec `:args` and `:return` fields.
   The `:encoding` field drives the wire types.
 
-  When any argument is a known struct, the call is routed through
-  [[ffi/call-ptr]] with composite ffi_type descriptors so that libffi
-  generates correct ARM64 calling code (HFA registers for struct-by-value
-  arguments).
-
-  LIMITATION: struct RETURN types are NOT dispatched through [[ffi/call-ptr]].
-  ARM64 HFA structs (like CLLocationCoordinate2D, 2 doubles) are returned in
-  d0-d1, but libffi incorrectly prepends a hidden stret pointer as x0 when a
-  composite return type is used, shifting receiver/selector and crashing
-  objc_msgSend.  Methods with struct return types require C shims or a separate
-  mechanism.  Use the fast path for struct-return methods — the caller is
-  responsible for interpreting the result."
+  When any argument or the return type is a known struct, the call routes
+  through [[ffi/call-ptr]] with composite ffi_type descriptors so libffi
+  generates correct ARM64 HFA calling code (d0–d3 for struct args/returns).
+  Struct return values come back as dtype InplaceNewStructs supporting [[get]]."
   [receiver sel-str method-spec arg-vals]
   (let [{:keys [ret arg-types]} (parse-encoding (:encoding method-spec))
         arg-specs    (:args method-spec)
         ret-type     (:return method-spec "id")
-        struct-arg?  (some #(structs/known-struct? (:type % "id")) arg-specs)]
-    (if struct-arg?
-      ;; ── Struct-arg path ──────────────────────────────────────────────────────
-      ;; At least one argument is a struct.  Use ffi/call-ptr so libffi applies
-      ;; the correct ARM64 calling convention (HFA d-registers for composite args).
-      ;; Return type is NOT a struct here (struct-return methods must use C shims).
-      (let [ffi-typed-args
+        struct-arg?  (some #(structs/known-struct? (:type % "id")) arg-specs)
+        struct-ret?  (structs/known-struct? ret-type)]
+    (if (or struct-arg? struct-ret?)
+      ;; ── Struct path ──────────────────────────────────────────────────────────
+      ;; Any struct argument or struct return type: use ffi/call-ptr so libffi
+      ;; applies the correct ARM64 HFA calling convention (d0–d3 registers).
+      (let [ffi-ret (if struct-ret?
+                      (do (ensure-ffi-struct! ret-type)
+                          (keyword ret-type))
+                      ret)
+            ffi-typed-args
             (mapcat (fn [spec arg-kw val]
                       (let [type-name (:type spec "id")]
                         (cond
@@ -265,7 +258,7 @@
                           [arg-kw (types/coerce-in type-name val)])))
                     arg-specs arg-types arg-vals)
             sel    (grease/register-objc-sel sel-str)
-            result (apply ffi/call-ptr @msg-send-fptr ret
+            result (apply ffi/call-ptr @msg-send-fptr ffi-ret
                           :pointer receiver :pointer sel
                           ffi-typed-args)]
         (types/coerce-out ret-type result))

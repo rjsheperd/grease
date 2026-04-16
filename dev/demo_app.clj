@@ -10,27 +10,26 @@
 ;;   demo-app.info     — Info tab label factory and updater
 ;;   demo-app.reload   — restart! hot-reload helper
 ;;
-;; Usage from nREPL after deploy:
-;;   (load-file "dev/demo_app/map.clj")
-;;   (load-file "dev/demo_app/location.clj")
-;;   (load-file "dev/demo_app/info.clj")
-;;   (load-file "dev/demo_app.clj")
-;;   (demo-app/start!)
+;; Usage from nREPL after deploy (send file contents via scripts/repl-eval):
+;;   scripts/repl-eval "$(cat dev/demo_app/map.clj)"
+;;   scripts/repl-eval "$(cat dev/demo_app/location.clj)"
+;;   scripts/repl-eval "$(cat dev/demo_app/info.clj)"
+;;   scripts/repl-eval "$(cat dev/demo_app.clj)"
+;;   scripts/repl-eval '(demo-app/start!)'
 ;;
 ;; Hot-reload:
-;;   (load-file "dev/demo_app/reload.clj")
-;;   (demo-app.reload/restart!)
+;;   scripts/repl-eval "$(cat dev/demo_app/reload.clj)"
+;;   scripts/repl-eval '(demo-app.reload/restart!)'
 
 (ns demo-app
-  (:require [com.phronemophobic.clj-libffi :as ffi]
-            [com.phronemophobic.grease     :as grease]
-            [demo-app.info                 :as info]
-            [demo-app.location             :as loc]
-            [demo-app.map                  :as m]
-            [grease.ios.foundation         :as f]
-            [grease.ios.objc               :as objc-rt]
-            [grease.ios.repl               :refer [on-main]]
-            [grease.ios.uikit              :as ui]))
+  (:require [com.phronemophobic.grease :as grease]
+            [demo-app.info             :as info]
+            [demo-app.location         :as loc]
+            [demo-app.map              :as m]
+            [grease.ios.foundation     :as f]
+            [grease.ios.objc           :as objc-rt]
+            [grease.ios.repl           :refer [on-main]]
+            [grease.ios.uikit          :as ui]))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; App state — all live ObjC pointers retained here to prevent ARC collection.
@@ -135,8 +134,7 @@
          map-v  (new-instance "MKMapView")
          ;; Use parent view bounds — not raw screen size — so the map
          ;; respects the space the UITabBarController allocates.
-         w      (ffi/call "grease_get_frame_w" :float64 :pointer root-v)
-         h      (ffi/call "grease_get_frame_h" :float64 :pointer root-v)]
+         {:keys [w h]} (ui/get-frame root-v)]
      (ui/set-frame! map-v 0.0 0.0 w h)
      ;; UIViewAutoresizingFlexibleWidth | FlexibleHeight = 2 | 16 = 18
      (objc-rt/msg-send :void map-v "setAutoresizingMask:" :int64 18)
