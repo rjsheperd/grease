@@ -173,22 +173,104 @@ The =fastlane/Fastfile= reads credentials from the environment variables in
 
 * Simulator builds
 
+Three scripts provide a self-contained simulator workflow that does not require
+a physical device, a signing certificate, or =ios-deploy=.
+
+** Step 1: Patch static libs for the simulator
+
+The iOS arm64 static libraries carry an =iphoneos= Mach-O platform tag.  The
+iOS Simulator linker rejects these.  =patch-libs-for-sim= re-tags every =.o=
+member to =iossim= using =vtool=, with a binary fallback for objects whose
+Mach-O header has no room for the larger =LC_BUILD_VERSION= load command.
+
 #+begin_src bash
-DESTINATION="platform=iOS Simulator,name=iPhone 15" \
-  direnv exec . ./scripts/build-demo-app
+./scripts/patch-libs-for-sim
 #+end_src
+
+Inputs: =lib/ios-arm64/*.a=, =build/staticjdk-ios-jdk21/lib/static/*.a=,
+and =xcode/MobileTest/aarch64-apple-ios/.libs/libffi.a=.
+
+Outputs: =lib/ios-sim-arm64/= and =build/staticjdk-iossim-jdk21/lib/static/=.
+
+This step is incremental: each archive is skipped if the destination is already
+newer than the source.
+
+** Step 2: Build MobileTest for the simulator
+
+#+begin_src bash
+./scripts/build-demo-app-sim
+#+end_src
+
+Writes =build/demo-app-sim.xcconfig= and invokes =xcodebuild= with
+=SDKROOT=iphonesimulator= and =ARCHS=arm64=.  DerivedData lands in
+=build/DerivedData-sim= so device and simulator builds share no state.
+
+Environment variables:
+
+| Variable             | Default    | Description                         |
+|----------------------+------------+-------------------------------------|
+| =SIM_NAME=           | iPhone 16  | Simulator device name               |
+| =IOS_TARGET=         | 16.0       | iOS deployment target               |
+| =CONFIGURATION=      | Debug      | =Debug= or =Release=                |
+| =XCODE_DEVELOPER_DIR=| xcode-select -p | Xcode developer directory      |
+
+** Step 3: Run on the simulator
+
+#+begin_src bash
+./scripts/sim-run
+#+end_src
+
+Boots the named simulator (=xcrun simctl boot=), installs the =.app=,
+streams the process log, launches the app, and polls =localhost:23456= until
+the babashka nREPL is ready (up to 60 s).
+
+Once the nREPL is open, connect from the host:
+
+#+begin_src bash
+clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' \
+    -M -m nrepl.cmdline --connect --host localhost --port 23456
+#+end_src
+
+Or run the full integration test suite against the simulator:
+
+#+begin_src bash
+NREPL_HOST=localhost NREPL_PORT=23456 tests/run_tests
+#+end_src
+
+** Notes on the simulator linker
+
+On Apple Silicon with CommandLineTools installed, the macOS linker searches the
+CommandLineTools =MacOSX.sdk= even when =-isysroot= points at the
+iPhoneSimulator SDK, picking up macOS-tagged =libobjc.tbd= and =libSystem.tbd=
+before the correct simulator stubs.  =build-demo-app-sim= works around this by
+copying all 143 TBD stubs from the simulator SDK's =usr/lib= into
+=build/sim-sys-stubs/= and placing that directory first in
+=LIBRARY_SEARCH_PATHS=, so the simulator-tagged versions are found first.
+
+System libraries (=-lz -ldl -lstdc++ -lpthread=) are intentionally omitted
+from =OTHER_LDFLAGS= in the simulator build; they are re-exported by
+=libSystem= in the iPhoneSimulator SDK and resolving them explicitly would
+pull in the macOS CommandLineTools versions.
 
 * nREPL
 
-After the app is running, connect from the host machine:
+After the app is running, connect from the host machine.
+
+*Physical device* (IP printed to console when the app starts):
 
 #+begin_src bash
 clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' \
   -M -m nrepl.cmdline --connect --host 192.168.0.111 --port 23456
 #+end_src
 
-The device IP is printed to the console when the app starts. The nREPL runs
-under babashka SCI, not standard JVM Clojure.
+*iOS Simulator* (port forwarded automatically to localhost):
+
+#+begin_src bash
+clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.3.0"}}}' \
+  -M -m nrepl.cmdline --connect --host localhost --port 23456
+#+end_src
+
+The nREPL runs under babashka SCI, not standard JVM Clojure.
 
 * ObjC Interop
 
