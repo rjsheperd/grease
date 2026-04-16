@@ -68,7 +68,7 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity)
-            .background(Color.indigo)
+            .background(Color.indigo.ignoresSafeArea(edges: .top))
 
             // ── Status cards ───────────────────────────────────────────────
             VStack(alignment: .leading, spacing: 10) {
@@ -150,7 +150,7 @@ struct ContentView: View {
             .padding(.horizontal)
             .padding(.bottom)
         }
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea(edges: .bottom)
         .onReceive(ticker) { _ in poll() }
         .onAppear {
             let raw = call_hash_code()
