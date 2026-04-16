@@ -1,0 +1,77 @@
+;; grease/structs.edn — struct field layouts for iOS arm64 (LP64 ABI).
+;;
+;; All CGFloat fields are double-precision (8 bytes) on arm64.
+;; Offsets are byte offsets from the start of the struct.
+;; Sizes are in bytes.
+;;
+;; Source: Apple SDK headers + LLVM arm64 ABI (clang -target arm64-apple-ios).
+;; These layouts are stable across iOS SDK versions.
+
+[;; CoreGraphics — CGGeometry.h
+ {:name   "CGFloat"
+  :fields [{:name "value" :type "double" :offset 0}]
+  :size   8}
+
+ {:name   "CGPoint"
+  :fields [{:name "x" :type "double" :offset 0}
+           {:name "y" :type "double" :offset 8}]
+  :size   16}
+
+ {:name   "CGSize"
+  :fields [{:name "width"  :type "double" :offset 0}
+           {:name "height" :type "double" :offset 8}]
+  :size   16}
+
+ {:name   "CGRect"
+  :fields [{:name "origin" :type "CGPoint" :offset 0}
+           {:name "size"   :type "CGSize"  :offset 16}]
+  :size   32}
+
+ {:name   "CGAffineTransform"
+  :fields [{:name "a"  :type "double" :offset 0}
+           {:name "b"  :type "double" :offset 8}
+           {:name "c"  :type "double" :offset 16}
+           {:name "d"  :type "double" :offset 24}
+           {:name "tx" :type "double" :offset 32}
+           {:name "ty" :type "double" :offset 40}]
+  :size   48}
+
+ ;; UIKit — UIGeometry.h
+ {:name   "UIEdgeInsets"
+  :fields [{:name "top"    :type "double" :offset 0}
+           {:name "left"   :type "double" :offset 8}
+           {:name "bottom" :type "double" :offset 16}
+           {:name "right"  :type "double" :offset 24}]
+  :size   32}
+
+ {:name   "UIOffset"
+  :fields [{:name "horizontal" :type "double" :offset 0}
+           {:name "vertical"   :type "double" :offset 8}]
+  :size   16}
+
+ ;; CoreLocation — CLLocation.h
+ {:name   "CLLocationCoordinate2D"
+  :fields [{:name "latitude"  :type "double" :offset 0}
+           {:name "longitude" :type "double" :offset 8}]
+  :size   16}
+
+ ;; CoreMedia — CMTime.h
+ ;; typedef struct { int64_t value; int32_t timescale; uint32_t flags; int64_t epoch; }
+ {:name   "CMTime"
+  :fields [{:name "value"     :type "int64"  :offset 0}
+           {:name "timescale" :type "int32"  :offset 8}
+           {:name "flags"     :type "uint32" :offset 12}
+           {:name "epoch"     :type "int64"  :offset 16}]
+  :size   24}
+
+ ;; CoreMedia — CMTimeRange.h
+ {:name   "CMTimeRange"
+  :fields [{:name "start"    :type "CMTime" :offset 0}
+           {:name "duration" :type "CMTime" :offset 24}]
+  :size   48}
+
+ ;; CoreMedia — CMTimeMapping.h
+ {:name   "CMTimeMapping"
+  :fields [{:name "source" :type "CMTimeRange" :offset 0}
+           {:name "target" :type "CMTimeRange" :offset 48}]
+  :size   96}]

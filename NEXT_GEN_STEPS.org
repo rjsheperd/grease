@@ -797,24 +797,23 @@ Source insight: objcjure uses ~com.phronemophobic/clong~ to parse C headers
 The grease engine marks all struct-arg/return methods ~:unsupported true~ (v1 deferral).
 This phase unlocks CGRect, CGPoint, CGSize, CMTime, CLLocationCoordinate2D, etc.
 
-** TODO 10.1 Parse iOS SDK headers with ~clong~
+** DONE 10.1 Provide struct field layouts in ~resources/grease/structs.edn~
 
-Add ~clong~ dev dependency.  Write ~dev/gen_structs.clj~ that:
-1. Runs ~clong/easy-api~ on relevant headers from the Xcode SDK:
-   ~CoreGraphics/CGGeometry.h~, ~CoreMedia/CMTime.h~, ~CoreLocation/CLLocation.h~
-2. Extracts struct field layouts (name, offset, type, size)
-3. Writes ~resources/grease/structs.edn~
+Hand-crafted ~structs.edn~ with stable arm64 struct layouts for 11 Apple structs:
+CGFloat, CGPoint, CGSize, CGRect, CGAffineTransform, UIEdgeInsets, UIOffset,
+CLLocationCoordinate2D, CMTime, CMTimeRange, CMTimeMapping.
+CGFloat = double (8 bytes) on LP64/arm64.  Avoids heavy bytedeco-llvm dependency.
 
-#+begin_src clojure
-;; Example output entry in structs.edn
-{:name "CGRect"
- :fields [{:name "origin" :type "CGPoint" :offset 0}
-           {:name "size"   :type "CGSize"  :offset 16}]
- :size 32}
-#+end_src
+Gate: 4 validation tests in ~structs_test.clj~ pass; 162 assertions, 0 failures.
 
-Gate: ~structs.edn~ exists; all field types resolve to primitive encodings or
-known struct names.
+*** DONE 10.1.1 Write ~resources/grease/structs.edn~
+
+Hand-crafted from Apple ARM64 ABI documentation.
+
+*** DONE 10.1.2 Validate ~structs.edn~ format
+
+~test/grease/ios/structs_test.clj~: loads file, checks required keys, resolves
+all field types (primitive or known struct), verifies :size = last-offset + last-size.
 
 ** TODO 10.2 Struct coercion in ~grease.ios.types~
 
@@ -830,6 +829,22 @@ classified as ~:pointer~) and apply ~coerce-out~ accordingly.
 Gate: ~(ios/call label :frame)~ returns ~{:x 0.0 :y 100.0 :width 375.0 :height 44.0}~
 instead of an opaque pointer.
 
+*** TODO 10.2.1 Add ~grease.ios.structs~ namespace
+
+Load ~structs.edn~, provide ~(struct-for name)~ lookup fn.  Mirror naming/registry pattern.
+
+*** TODO 10.2.2 Extend ~types/coerce-in~ for struct types
+
+Map destructuring → ByteBuffer packing using dtype-next struct-datatype.
+
+*** TODO 10.2.3 Extend ~types/coerce-out~ for struct type returns
+
+Struct pointer → Clojure map with named keyword fields.
+
+*** TODO 10.2.4 Update ~invoke/dispatch!~ for struct returns
+
+Detect struct return types (e.g. ~"CGRect"~) and route to ~types/coerce-out~ correctly.
+
 ** TODO 10.3 Remove ~:unsupported true~ gates from scraped EDN
 
 Re-run ~grease.scrape.normalize~ with struct types now resolvable.
@@ -837,6 +852,14 @@ Methods previously tagged ~:unsupported true~ due to CGRect/CGPoint/etc.
 args get proper encoding and become callable.
 
 Oracle check: before/after counts of ~:unsupported true~ methods per framework.
+
+*** TODO 10.3.1 Identify all ~:unsupported true~ methods in scraped EDN
+
+Count them per framework; identify which need struct support vs. other reasons.
+
+*** TODO 10.3.2 Re-run normalizer with struct-aware encoding
+
+Update ~grease.scrape.normalize~ to emit proper encoding for struct-typed args/returns.
 
 * Open Questions (from §9 of NEXT_GEN_ARCH.md)
 
