@@ -5,6 +5,36 @@
 
 import SwiftUI
 
+// Clojure teal: matches the official Clojure brand palette.
+private let clojureTeal = Color(red: 0.36, green: 0.78, blue: 0.78)
+
+/// Stylised Clojure logo — a white λ inside a teal circle.
+private struct ClojureLogo: View {
+    var size: CGFloat = 40
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(clojureTeal)
+                .frame(width: size, height: size)
+            Text("λ")
+                .font(.system(size: size * 0.48, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+        }
+    }
+}
+
+/// Apple logo rendered via SF Symbol.
+private struct AppleLogo: View {
+    var size: CGFloat = 36
+    var body: some View {
+        Image(systemName: "apple.logo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size * 0.72, height: size)
+            .foregroundColor(.white)
+    }
+}
+
 struct ContentView: View {
     @State private var hashValue: String = "..."
     @State private var nreplPort: Int = 0
@@ -17,12 +47,28 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
 
             // ── Title ──────────────────────────────────────────────────────
-            Text("CLOJURE BRIDGE")
-                .font(.system(size: 30, weight: .black))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(Color.indigo)
-                .foregroundColor(.white)
+            HStack(spacing: 12) {
+                ClojureLogo(size: 44)
+                VStack(spacing: 1) {
+                    HStack(spacing: 8) {
+                        Text("Clojure")
+                            .font(.system(size: 26, weight: .black, design: .rounded))
+                            .foregroundColor(clojureTeal)
+                        AppleLogo(size: 26)
+                        Text("Bridge")
+                            .font(.system(size: 26, weight: .black, design: .rounded))
+                            .foregroundColor(.white)
+                    }
+                    Text("GraalVM · SCI · nREPL")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.55))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(Color.indigo)
 
             // ── Status cards ───────────────────────────────────────────────
             VStack(alignment: .leading, spacing: 10) {
