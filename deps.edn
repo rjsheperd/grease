@@ -9,10 +9,12 @@
         net.java.dev.jna/jna     {:mvn/version "5.14.0"}
         ;; org.graalvm.nativeimage/library-support {:mvn/version "23.1.8"}
 
-        ;; Objective-C FFI — override transitive clj-libffi 1.5 with local fixed version.
-        ;; Fix: struct-def->ffi-type now zeros :size/:alignment so ffi_prep_cif always
-        ;; triggers initialize_aggregate → correct HFA register selection on ARM64 iOS.
-        com.phronemophobic/clj-libffi          {:local/root "../clj-libffi"}
+        ;; Objective-C FFI — override transitive clj-libffi 1.5 with fork containing
+        ;; the ARM64 HFA fix: struct-def->ffi-type zeros :size/:alignment so
+        ;; ffi_prep_cif always triggers initialize_aggregate, selecting the correct
+        ;; HFA register convention (d0/d1 vs x0/x1) for struct returns on iOS.
+        com.phronemophobic/clj-libffi          {:git/url "https://github.com/rjsheperd/clj-libffi"
+                                                :git/sha "8d7881eb85c2fe64156fbc00b494e0716867621a"}
         com.phronemophobic/objcjure            {:mvn/version "1.0"}
         ;; SCI pinned: scify pulls 0.2.5 but babashka.nrepl needs sci/stacktrace (added later)
         org.babashka/sci                       {:mvn/version "0.8.43"}
