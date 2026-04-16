@@ -226,6 +226,7 @@
          ;; dtype FFI + struct helpers
         (scify/ns->ns-map 'tech.v3.datatype.ffi)
         (scify/ns->ns-map 'tech.v3.datatype.struct)
+        (scify/ns->ns-map 'tech.v3.datatype.native-buffer)
 
          ;; grease.ios-host — JVM-side I/O helpers for engine namespace loading.
          ;; read-resource loads a classpath resource and returns its content as a
