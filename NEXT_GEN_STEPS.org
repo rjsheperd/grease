@@ -819,31 +819,35 @@ all field types (primitive or known struct), verifies :size = last-offset + last
 
 Extend ~types/coerce-in~ and ~types/coerce-out~ to handle struct types:
 - ~coerce-in~: Clojure map ~{:x 0 :y 0 :width 100 :height 50}~ → packed byte buffer
-  (via ~dtype-next/struct-datatype~ or manual ~ByteBuffer~)
-- ~coerce-out~: raw pointer / value-return → Clojure map with named fields
-- Expose a ~(types/struct-for [type-name])~ lookup
+- ~coerce-out~: struct pointer → Clojure map with named keyword fields
+- Expose a ~(structs/struct-for name)~ lookup
 
-Update ~grease.ios.invoke/dispatch!~ to detect struct return types (currently
-classified as ~:pointer~) and apply ~coerce-out~ accordingly.
+Update ~grease.ios.invoke/dispatch!~ to detect struct return types and apply
+~structs/unpack~ accordingly.  Requires ~objc_msgSend_stret~ for structs > 16 bytes.
 
 Gate: ~(ios/call label :frame)~ returns ~{:x 0.0 :y 100.0 :width 375.0 :height 44.0}~
 instead of an opaque pointer.
 
-*** TODO 10.2.1 Add ~grease.ios.structs~ namespace
+*** DONE 10.2.1 Add ~grease.ios.structs~ namespace
 
-Load ~structs.edn~, provide ~(struct-for name)~ lookup fn.  Mirror naming/registry pattern.
+~src/grease/ios/structs.clj~: loads ~structs.edn~, provides ~struct-for~,
+~known-struct?~, ~pack~ (map → ByteBuffer), ~unpack~ (ByteBuffer → map).
+Nested struct fields supported recursively.  8 gate tests pass (28 assertions).
 
-*** TODO 10.2.2 Extend ~types/coerce-in~ for struct types
+*** TODO 10.2.2 Wire ~structs/pack~ into ~types/coerce-in~
 
-Map destructuring → ByteBuffer packing using dtype-next struct-datatype.
+Register struct types in the type-table via ~(types/register-struct! "CGRect")~
+so ~(types/coerce-in "CGRect" {:origin ...})~ calls ~structs/pack~.
 
-*** TODO 10.2.3 Extend ~types/coerce-out~ for struct type returns
+*** TODO 10.2.3 Wire ~structs/unpack~ into ~types/coerce-out~
 
-Struct pointer → Clojure map with named keyword fields.
+Register struct types so ~(types/coerce-out "CGRect" buf)~ calls ~structs/unpack~.
+Handle both ByteBuffer (already extracted) and raw pointer (read memory) cases.
 
 *** TODO 10.2.4 Update ~invoke/dispatch!~ for struct returns
 
-Detect struct return types (e.g. ~"CGRect"~) and route to ~types/coerce-out~ correctly.
+Detect struct return types in method spec and use ~objc_msgSend_stret~ for
+structs > 16 bytes.  Read returned memory into a ByteBuffer and call ~structs/unpack~.
 
 ** TODO 10.3 Remove ~:unsupported true~ gates from scraped EDN
 
