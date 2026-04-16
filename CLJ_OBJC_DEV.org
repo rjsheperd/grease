@@ -1,0 +1,282 @@
+#+TITLE: Clojure ↔ ObjC/iOS Development Guide
+#+DATE: 2026-04-16
+#+OPTIONS: toc:2 num:nil
+
+* Overview
+
+~grease~ is a data-driven engine for calling iOS Objective-C APIs from Clojure.
+The core idea: drop an EDN spec file in ~resources/grease/api-specs/~; the engine
+handles instantiation, method dispatch, type coercion, delegate wiring, and blocks
+automatically — no hand-written wrappers needed.
+
+** Architecture Summary
+
+#+begin_src
+  EDN Spec Files
+  (api-specs/*.edn)
+        ↓
+  grease.ios.spec + grease.ios.registry
+  (load, validate, index)
+        ↓
+  grease.ios.naming      grease.ios.types      grease.ios.structs
+  (ObjC↔Clojure names)  (type coerce table)   (struct layouts)
+        ↓                       ↓                      ↓
+              grease.ios.invoke / dispatch!
+              (resolve → coerce-in → msg-send → coerce-out)
+                    ↓               ↓
+              grease.ios.patterns   grease.ios.blocks
+              (delegates, KVO,      (completion handlers,
+               completion blocks)    make-typed-block)
+                              ↓
+                    grease.ios.api
+                    (user-facing: make/call/get-prop/set-prop!/watch)
+#+end_src
+
+* Key APIs
+
+** User-Facing (~grease.ios.api~)
+
+#+begin_src clojure
+(require '[grease.ios.api :as ios])
+
+(ios/load!)                              ; load all EDN specs once at startup
+(ios/make :location-manager)             ; allocate + init an ObjC object
+(ios/call mgr :start-updating-location) ; call an instance method
+(ios/get-prop label :text)               ; read a property
+(ios/set-prop! label :text "Hello")      ; write a property
+(ios/watch obj :status on-change-fn)     ; KVO observer → returns handle
+(ios/unwatch handle)                     ; remove KVO observer
+(ios/enum :cb-manager-state :powered-on) ; enum keyword → raw int
+#+end_src
+
+Auto-coercion: plain Clojure values are boxed automatically for ~:type "id"~ args.
+#+begin_src clojure
+(ios/call label :set-text "Hello")       ; String auto-boxed to NSString
+(ios/call arr :add-object 42)            ; Long auto-boxed to NSNumber
+#+end_src
+
+** Lower-Level (~grease.ios.invoke~)
+
+#+begin_src clojure
+(require '[grease.ios.invoke :as invoke])
+(require '[grease.ios.registry :as registry])
+
+(let [m (registry/method-spec "NSMutableArray" "addObject:")]
+  (invoke/dispatch! arr "addObject:" m ["hello"]))
+#+end_src
+
+* EDN Spec Format
+
+#+begin_src clojure
+{:framework  "CoreLocation"
+ :doc-url    "https://developer.apple.com/documentation/corelocation"
+ :classes
+ [{:name       "CLLocationManager"
+   :superclass "NSObject"
+   :init       [{:selector "init"    :encoding "@@:" :return "id"    :args []}]
+   :methods
+   [{:selector     "startUpdatingLocation"
+     :encoding     "v@:"
+     :return       "void"
+     :args         []
+     :main-thread? true}
+    {:selector "setDelegate:"
+     :encoding "v@:@"
+     :return   "void"
+     :args     [{:name "delegate" :type "id" :pattern :delegate}]}
+    {:selector "requestWhenInUseAuthorization"
+     :encoding "v@:"
+     :return   "void"
+     :args     []
+     :main-thread? true}]
+   :properties []}]
+ :protocols
+ [{:name "CLLocationManagerDelegate"
+   :methods
+   [{:selector "locationManager:didUpdateLocations:" :encoding "v@:@@"}]}]
+ :enums    []
+ :constants []}
+#+end_src
+
+** Key Method Fields
+
+| Field           | Type    | Description                                       |
+|-----------------+---------+---------------------------------------------------|
+| ~:selector~     | string  | ObjC selector (e.g. ~"addObject:"~)               |
+| ~:encoding~     | string  | ObjC type encoding (e.g. ~"v@:@"~)                |
+| ~:return~       | string  | Return type name (e.g. ~"void"~, ~"NSString"~)    |
+| ~:args~         | vector  | ~[{:name :type :pattern}]~ per argument           |
+| ~:main-thread?~ | bool    | Dispatch via GCD main queue if true               |
+| ~:pattern~      | keyword | ~:delegate~, ~:completion-handler~, ~:kvo~        |
+| ~:block-args~   | vector  | FFI arg keywords for completion block             |
+
+** Struct Encodings
+
+Structs use compound ObjC encodings, auto-generated from ~grease/structs.edn~:
+
+#+begin_src
+CGPoint                → {CGPoint=dd}
+CGSize                 → {CGSize=dd}
+CGRect                 → {CGRect={CGPoint=dd}{CGSize=dd}}
+CLLocationCoordinate2D → {CLLocationCoordinate2D=dd}
+CMTime                 → {CMTime=qiIq}
+#+end_src
+
+* Naming Conventions
+
+ObjC names are transformed to idiomatic Clojure automatically:
+
+| ObjC                       | Clojure Keyword         | Rule                      |
+|----------------------------+-------------------------+---------------------------|
+| ~startUpdatingLocation~    | ~:start-updating-location~ | ~:camel->kebab~          |
+| ~isPlaying~                | ~:playing?~             | ~:strip+question~         |
+| ~volume~ (setter)          | ~set-volume!~           | ~:wrap-set-bang~          |
+| ~AVPlayer~                 | ~:av-player~            | ~:strip-framework-prefix~ |
+| ~setObject:forKey:~        | ~set-object-for-key~    | colons flattened first    |
+| ~readyToPlay~ (enum value) | ~:ready-to-play~        | ~:camel->kebab-keyword~   |
+
+The naming rules live in ~resources/grease/naming.edn~. The ~grease.ios.naming/transform-spec~
+function annotates every loaded spec with ~::clj-name~ and builds the reverse index
+so keyword lookups resolve to selectors.
+
+* Type System (~resources/grease/types.edn~)
+
+Core primitive types and their ObjC encodings:
+
+| Type name    | Encoding | Clojure ↔ ObjC                         |
+|--------------+----------+-----------------------------------------|
+| ~void~       | ~v~      | —                                       |
+| ~id~         | ~@~      | passthrough pointer                     |
+| ~NSString~   | ~@~      | ~str~ ↔ ~->nsstring~ / ~nsstring->str~  |
+| ~NSArray~    | ~@~      | ~vec~ ↔ ~->nsarray~ / ~nsarray->vec~    |
+| ~NSDictionary~ | ~@~    | ~map~ ↔ ~->nsdict~ / ~nsdict->map~      |
+| ~NSNumber~   | ~@~      | ~long~/~double~ ↔ NSNumber              |
+| ~BOOL~       | ~B~      | ~true~/~false~                          |
+| ~NSInteger~  | ~q~      | Java ~long~                             |
+| ~NSUInteger~ | ~Q~      | Java ~long~                             |
+| ~Double~     | ~d~      | Java ~double~                           |
+| ~Float~      | ~f~      | Java ~float~                            |
+
+Struct types register dynamically via ~(types/register-struct! name)~.
+ObjC class names register via ~(types/register-class! name)~.
+
+* Delegate / Block Patterns
+
+** Delegate (~:pattern :delegate~)
+
+Pass a Clojure map of ~{:callback-keyword fn}~ as the delegate argument.
+The engine creates an ObjC class at runtime via ~objc-rt/defclass!~, wires each key
+to a method, and retains the class in an internal atom.
+
+#+begin_src clojure
+(ios/call mgr :set-delegate
+  {:location-manager-did-update-locations
+   (fn [_mgr locs] (println "Got locations:" locs))})
+#+end_src
+
+** Completion Handler (~:pattern :completion-handler~, ~:block-args [...]~)
+
+The engine creates a block via ~blocks/make-typed-block~, returns a promise,
+and delivers the result when the block fires.
+
+#+begin_src clojure
+(let [result (ios/call session :data-task-with-request req)]
+  @result)  ; blocks until completion handler fires
+#+end_src
+
+** KVO (~:pattern :kvo~)
+
+#+begin_src clojure
+(def h (ios/watch player :status (fn [old new] (println "status:" new))))
+(ios/unwatch h)
+#+end_src
+
+* Spec Files (current)
+
+Five hand-written oracle specs + ~75 scraped from Apple developer docs:
+
+| File                  | Status     | Key Classes                              |
+|-----------------------+------------+------------------------------------------|
+| ~Foundation.edn~      | hand-written | NSString, NSArray, NSDictionary, NSNumber |
+| ~CoreLocation.edn~    | hand-written | CLLocationManager, CLLocation            |
+| ~AVFoundation.edn~    | hand-written | AVCaptureSession, AVPlayer               |
+| ~UIKit.edn~           | hand-written | UIView, UILabel, UIApplication           |
+| ~CoreBluetooth.edn~   | hand-written | CBCentralManager, CBPeripheral           |
+| ~*.edn~ (75 others)   | scraped    | All major Apple frameworks               |
+
+The scraper lives at ~grease.scrape.normalize~ / ~grease.scrape.apple-docs~.
+Run it: ~clj -M -m grease.scrape.run CoreLocation AVFoundation~
+
+* Structs (~resources/grease/structs.edn~)
+
+11 hand-crafted arm64 struct layouts (from Apple ABI docs):
+CGFloat, CGPoint, CGSize, CGRect, CGAffineTransform, UIEdgeInsets, UIOffset,
+CLLocationCoordinate2D, CMTime, CMTimeRange, CMTimeMapping.
+
+~grease.ios.structs~ provides ~pack~ (map → ByteBuffer) and ~unpack~ (ByteBuffer → map).
+~invoke/dispatch!~ routes struct-returning methods through ~ffi/call-ptr~ with a ~dt-struct~ CIF.
+
+* SCI / GraalVM Constraints
+
+These constraints apply to code that runs inside the frozen native image:
+
+| Issue                        | Symptom                                         | Fix                                               |
+|------------------------------+-------------------------------------------------+---------------------------------------------------|
+| ~Math/abs~                   | ~Could not resolve symbol~                      | Use ~(bit-and x 0x7fffffff)~ or chained comparison |
+| ~requiring-resolve~          | Fails at runtime in frozen image                | Use ~resolve~ (namespace already eval'd into SCI) |
+| Nested backtick in ~defclass~ | ~cls__30__auto__~ unresolved                   | Compute inner forms via ~mapv~ before outer backtick |
+| ~java.lang.Thread/sleep~     | Not available in SCI                            | Use ~(deref (promise) ms nil)~                    |
+| ~clojure.java.io~ in SCI      | Not exposed                                     | Use ~grease.ios-host/read-resource~               |
+| New resource format           | ~io/resource~ returns nil                      | Add to ~conf/resourceconfig-arm64-ios.json~       |
+
+Engine namespaces are loaded into SCI at startup via ~sci/eval-string*~ in
+~src/com/phronemophobic/grease.clj~ in strict dependency order:
+~types → naming → spec → registry → invoke → structs → patterns → api~
+
+* Testing
+
+** JVM Tests (fast, no device)
+
+#+begin_src bash
+clj -M:test                              # all 249+ tests
+clj -M:test test/grease/ios/oracle_test.clj   # oracle: all specs × all types/enums
+clj -M:test test/grease/ios/invoke_test.clj   # dispatch! + auto-coerce
+clj -M:test test/grease/scrape/normalize_test.clj  # scraper encoding
+#+end_src
+
+** On-Device Tests (requires iOS device at 192.168.0.111:23456)
+
+#+begin_src bash
+clj -M tests/test_engine.clj             # Foundation engine round-trips
+clj -M tests/test_engine_corelocation.clj  # CLLocationManager + GPS (Phase 2.3)
+clj -M tests/test_engine_avfoundation.clj  # AVCaptureSession + camera
+clj -M tests/test_engine_corebluetooth.clj  # CBCentralManager + BLE
+clj -M tests/test_engine_phase9_10.clj     # blocks + structs pack/unpack
+#+end_src
+
+* Build Pipeline
+
+#+begin_src bash
+# Full clean build (required after any .clj or .edn change)
+rm -rf build/bb build/bb-tmp target conf/capcache
+./scripts/build-bb-o
+
+# Link, sign, deploy
+direnv exec . ./scripts/build-demo-app
+pkill -f ios-deploy 2>/dev/null && ./scripts/deploy-demo-app
+./scripts/debug-demo-app --noinstall
+
+# Fast rebuild when NO files changed (cache replay only)
+USE_CAP_CACHE=use ./scripts/build-bb-o
+#+end_src
+
+* Remaining Work
+
+| Task                                     | Effort | Prerequisite      |
+|------------------------------------------+--------+-------------------|
+| Phase 2.3: on-device CoreLocation engine | Low    | Device outdoors   |
+| NEXT_STEPS 6.3: HealthKit spec           | Medium | Entitlement       |
+| NEXT_STEPS 6.4: NFC spec                 | Medium | Entitlement       |
+| NEXT_STEPS 6.5: Push Notifications spec  | Low    | None              |
+| NEXT_STEPS 9.2: resource hot-reload      | High   | None              |
+| More scraped frameworks on device        | Low    | Running app       |

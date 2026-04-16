@@ -1,0 +1,779 @@
+#+TITLE: Demo App — Map + Tab Bar + CoreLocation
+#+DATE: 2026-04-16
+#+OPTIONS: toc:2 num:nil
+#+TODO: TODO IN-PROGRESS | DONE CANCELLED
+
+* Goal
+
+A live demo app controlled entirely from the Clojure nREPL:
+
+- Two-tab bottom tab bar (~UITabBarController~)
+- *Tab 1 — Map*: full-screen ~MKMapView~, blue user-location dot, map
+  auto-centers on first GPS fix, re-centers on each update
+- *Tab 2 — Info*: ~UILabel~ stack showing live lat/lon/accuracy/timestamp,
+  updated by an atom watch every time CLLocation changes
+
+Zero ~Bridge.m~ changes after Phase 0. Zero ~build-bb-o~ rebuilds after
+Phase 0. All logic lives in Clojure, loaded from the nREPL.
+
+* Architecture
+
+#+begin_src
+  grease.ios.api   (ios/make, ios/call, ios/watch)
+       ↓                      ↓
+  UITabBarController     CLLocationManager
+  + UINavigationControllers   ↓  delegate pattern
+  + UIViewControllers    @location atom
+       ↓                      ↓
+  MKMapView          atom watch → dispatch-main-async
+  (grease_set_map_region    → set-text!, setRegion:animated:
+   C shim for struct arg)
+#+end_src
+
+State lives in three top-level atoms:
+
+| Atom              | Holds                                      |
+|-------------------+--------------------------------------------|
+| ~@app-state~      | ~{:tab-bar :map-vc :info-vc}~ — UI handles |
+| ~@location~       | Latest CLLocation pointer (nil until fix)  |
+| ~@location-mgr~   | CLLocationManager + delegate references    |
+
+* Phase 0 — Spec Prep & C Shims
+
+Goal: everything the later phases need is available as engine-callable API
+or direct FFI before we write a single line of UI code.  Full rebuild once
+here; zero rebuilds after.
+
+** TODO 0.1 Fix ~MapKit.edn~
+
+The auto-scraped ~resources/grease/api-specs/MapKit.edn~ pulled Swift
+documentation and is not usable.  Replace with a hand-written ObjC spec
+covering the subset needed for this demo.
+
+Classes to add:
+
+| Class            | Selectors                                             |
+|------------------+-------------------------------------------------------|
+| ~MKMapView~      | ~initWithFrame:~, ~setShowsUserLocation:~,            |
+|                  | ~setUserTrackingMode:animated:~, ~setRegion:animated:~|
+|                  | (setRegion via C shim — struct arg, see 0.3)          |
+| ~MKUserLocation~ | ~location~ (returns CLLocation pointer)               |
+
+Note: ~setRegion:animated:~ takes an ~MKCoordinateRegion~ struct arg.  Mark
+it ~:unsupported true~ in the EDN; use the C shim from 0.3 instead.
+
+Gate: ~(registry/class-spec "MKMapView")~ returns a non-nil map.
+
+** TODO 0.2 Add MapKit structs to ~structs.edn~
+
+~MKCoordinateSpan~ and ~MKCoordinateRegion~ are needed for the C shim in 0.3
+and for the scraper normalizer if MapKit methods are ever re-scraped.
+
+Add to ~resources/grease/structs.edn~:
+
+#+begin_src clojure
+;; MapKit — MKGeometry.h
+;; MKCoordinateSpan: two CLLocationDegrees (= double) fields
+{:name   "MKCoordinateSpan"
+ :fields [{:name "latitude-delta"  :type "double" :offset 0}
+          {:name "longitude-delta" :type "double" :offset 8}]
+ :size   16}
+
+;; MKCoordinateRegion: CLLocationCoordinate2D + MKCoordinateSpan
+;; Total: 16 + 16 = 32 bytes
+{:name   "MKCoordinateRegion"
+ :fields [{:name "center" :type "CLLocationCoordinate2D" :offset 0}
+          {:name "span"   :type "MKCoordinateSpan"       :offset 16}]
+ :size   32}
+#+end_src
+
+Gate: ~structs_test.clj~ still passes with the new entries; sizes validated.
+
+** TODO 0.3 Add C shim ~grease_set_map_region~
+
+~setRegion:animated:~ takes an ~MKCoordinateRegion~ struct by value (32 bytes
+= 2× HFA of 16 bytes each).  Cannot be called via a generic ~msg-send~.
+Add a scalar-arg shim to ~xcode/MobileTest/csource/Bridge.m~ and ~Bridge.h~:
+
+#+begin_src objc
+// Bridge.h
+void grease_set_map_region(void *mapView,
+                           double center_lat, double center_lng,
+                           double span_lat_delta, double span_lng_delta,
+                           BOOL animated);
+
+// Bridge.m
+#import <MapKit/MapKit.h>
+
+void grease_set_map_region(void *mapView,
+                           double center_lat, double center_lng,
+                           double span_lat_delta, double span_lng_delta,
+                           BOOL animated) {
+    MKMapView *mv = (__bridge MKMapView *)mapView;
+    MKCoordinateRegion r =
+        MKCoordinateRegionMake(
+            CLLocationCoordinate2DMake(center_lat, center_lng),
+            MKCoordinateSpanMake(span_lat_delta, span_lng_delta));
+    [mv setRegion:r animated:animated];
+}
+#+end_src
+
+Expose in Clojure as:
+
+#+begin_src clojure
+(defn set-map-region!
+  "Centers mapView on [lat lng] with the given degree span."
+  [map-view lat lng lat-delta lng-delta animated?]
+  (ffi/call "grease_set_map_region" :void
+            :pointer map-view
+            :float64 lat  :float64 lng
+            :float64 lat-delta :float64 lng-delta
+            :int8    (if animated? 1 0)))
+#+end_src
+
+Gate: ~ffi/find-library "grease_set_map_region"~ resolves (app starts).
+
+** TODO 0.4 Expand ~UIKit.edn~ for tab bar and navigation
+
+Add missing classes to the hand-written ~resources/grease/api-specs/UIKit.edn~:
+
+#+begin_src clojure
+{:name "UITabBarController"
+ :superclass "NSObject"
+ :init [{:selector "init" :encoding "@@:" :return "id" :args []}]
+ :methods
+ [{:selector "setViewControllers:animated:"
+   :encoding "v@:@B"
+   :return "void"
+   :args [{:name "viewControllers" :type "NSArray"}
+          {:name "animated" :type "BOOL"}]
+   :main-thread? true}
+  {:selector "selectedIndex"
+   :encoding "Q@:"
+   :return "NSUInteger"
+   :args []
+   :main-thread? true}
+  {:selector "setSelectedIndex:"
+   :encoding "v@:Q"
+   :return "void"
+   :args [{:name "index" :type "NSUInteger"}]
+   :main-thread? true}]}
+
+{:name "UINavigationController"
+ :superclass "NSObject"
+ :init
+ [{:selector "initWithRootViewController:"
+   :encoding "@@:@"
+   :return "id"
+   :args [{:name "rootViewController" :type "id"}]}]
+ :methods
+ [{:selector "setNavigationBarHidden:animated:"
+   :encoding "v@:BB"
+   :return "void"
+   :args [{:name "hidden" :type "BOOL"}
+          {:name "animated" :type "BOOL"}]
+   :main-thread? true}]}
+
+{:name "UITabBarItem"
+ :superclass "NSObject"
+ :init
+ [{:selector "initWithTitle:image:tag:"
+   :encoding "@@:@@q"
+   :return "id"
+   :args [{:name "title" :type "NSString"}
+          {:name "image" :type "id"}
+          {:name "tag"   :type "NSInteger"}]}]
+ :methods []}
+#+end_src
+
+Gate: oracle test passes; all new selectors findable by registry.
+
+** TODO 0.5 Full rebuild + deploy
+
+#+begin_src bash
+rm -rf build/bb build/bb-tmp target conf/capcache
+./scripts/build-bb-o
+direnv exec . ./scripts/build-demo-app
+pkill -f ios-deploy 2>/dev/null && ./scripts/deploy-demo-app
+./scripts/debug-demo-app --noinstall
+#+end_src
+
+Gate: app starts without crash; ~(require '[grease.ios.api :as ios])~ works
+in nREPL; ~(ios/load!)~ loads all specs without error.
+
+** TODO 0.6 Phase 0 Architecture Review
+
+After the rebuild, evaluate:
+
+1. *Shim count*: is ~grease_set_map_region~ the only new shim?  If more
+   MKMapView operations need struct args (e.g. ~visibleMapRect~), note them
+   for later phases so we can batch the Bridge.m changes.
+
+2. *Engine coverage*: which MapKit/UIKit selectors will we call via
+   ~ios/call~ vs. raw ~objc-rt/msg-send~?  Target: 100% engine API for all
+   message-only calls; C shims only for struct-arg/return.
+
+3. *EDN quality*: do MapKit.edn and UIKit.edn additions have correct
+   encodings?  Run the oracle test to verify.
+
+4. *Spec duplication*: check that UITabBarController, UINavigationController
+   are not also in the scraped UIKit spec.  If so, merge or mark the scraped
+   version ~:superseded-by "UIKit"~.
+
+* Phase 1 — Tab Bar Shell
+
+Goal: two-tab ~UITabBarController~ installed as the root view controller,
+visible on device.  No map, no location yet.
+
+** TODO 1.1 Write ~dev/demo_app.clj~
+
+Create ~dev/demo_app.clj~ with the following structure.  All UIKit calls
+wrapped in ~on-main~:
+
+#+begin_src clojure
+(ns demo-app
+  (:require [grease.ios.api      :as ios]
+            [grease.ios.objc     :as objc-rt]
+            [grease.ios.foundation :as f]
+            [grease.ios.repl     :refer [on-main]]
+            [com.phronemophobic.grease :refer [ffi]]))
+
+(defonce app-state (atom {}))
+
+(defn make-map-vc
+  "Allocates a plain UIViewController for the Map tab (MKMapView added in Phase 2)."
+  []
+  (on-main
+    (let [vc (objc-rt/msg-send :pointer
+                               (objc-rt/get-class "UIViewController") "new")]
+      (objc-rt/msg-send :void
+                        (objc-rt/msg-send :pointer vc "view")
+                        "setBackgroundColor:"
+                        :pointer (objc-rt/msg-send :pointer
+                                                   (objc-rt/get-class "UIColor")
+                                                   "systemBlueColor"))
+      vc)))
+
+(defn make-info-vc
+  "Allocates a plain UIViewController for the Info tab."
+  []
+  (on-main
+    (let [vc (objc-rt/msg-send :pointer
+                               (objc-rt/get-class "UIViewController") "new")]
+      (objc-rt/msg-send :void
+                        (objc-rt/msg-send :pointer vc "view")
+                        "setBackgroundColor:"
+                        :pointer (objc-rt/msg-send :pointer
+                                                   (objc-rt/get-class "UIColor")
+                                                   "systemGroupedBackgroundColor"))
+      vc)))
+
+(defn make-tab-bar!
+  "Creates the UITabBarController and installs it as rootViewController."
+  []
+  (on-main
+    (let [map-vc   (make-map-vc)
+          info-vc  (make-info-vc)
+          map-nav  (objc-rt/msg-send :pointer
+                                     (objc-rt/get-class "UINavigationController")
+                                     "initWithRootViewController:" :pointer map-vc)
+          info-nav (objc-rt/msg-send :pointer
+                                     (objc-rt/get-class "UINavigationController")
+                                     "initWithRootViewController:" :pointer info-vc)
+          tab-bar  (objc-rt/msg-send :pointer
+                                     (objc-rt/get-class "UITabBarController") "new")
+          vcs      (f/->nsarray [map-nav info-nav])]
+      ;; Tab bar items
+      (objc-rt/msg-send :void map-vc "setTabBarItem:"
+                        :pointer (objc-rt/msg-send :pointer
+                                                   (objc-rt/get-class "UITabBarItem")
+                                                   "initWithTitle:image:tag:"
+                                                   :pointer (f/->nsstring "Map")
+                                                   :pointer (f/null-ptr)
+                                                   :int64 0))
+      (objc-rt/msg-send :void info-vc "setTabBarItem:"
+                        :pointer (objc-rt/msg-send :pointer
+                                                   (objc-rt/get-class "UITabBarItem")
+                                                   "initWithTitle:image:tag:"
+                                                   :pointer (f/->nsstring "Info")
+                                                   :pointer (f/null-ptr)
+                                                   :int64 1))
+      (objc-rt/msg-send :void tab-bar "setViewControllers:animated:"
+                        :pointer vcs :int8 0)
+      ;; Install as root
+      (let [hook   (objc-rt/msg-send :pointer (objc-rt/get-class "GreaseHook") "shared")
+            window (objc-rt/msg-send :pointer hook "window")]
+        (objc-rt/msg-send :void window "setRootViewController:" :pointer tab-bar))
+      (swap! app-state assoc
+             :tab-bar  tab-bar
+             :map-vc   map-vc
+             :info-vc  info-vc
+             :map-nav  map-nav
+             :info-nav info-nav))))
+#+end_src
+
+** TODO 1.2 Add ~window~ property to ~GreaseHook.swift~
+
+The tab bar needs to replace the root view controller on the key window.
+~GreaseHook.shared~ already exposes ~message~; add a ~window~ accessor:
+
+#+begin_src swift
+// GreaseHook.swift
+@objc var window: UIWindow? {
+    return UIApplication.shared.windows.first
+}
+#+end_src
+
+Gate: ~(objc-rt/msg-send :pointer hook "window")~ returns a non-nil pointer.
+
+** TODO 1.3 On-device smoke test
+
+From the nREPL:
+
+#+begin_src clojure
+(require '[demo-app :refer :all])
+(make-tab-bar!)
+;; -> Device shows two-tab UI: blue "Map" tab + gray "Info" tab
+;; -> Tapping tabs switches between them
+#+end_src
+
+Gate: tab bar visible, both tabs tap-navigable, app does not crash.
+
+** TODO 1.4 Phase 1 Architecture Review
+
+Evaluate ~dev/demo_app.clj~ after it works:
+
+1. *Engine API vs raw msg-send*: ~make-tab-bar!~ uses raw ~objc-rt/msg-send~
+   throughout.  Which calls can be replaced with ~ios/call~ + UIKit.edn?
+   Flag each one and mark the gap in UIKit.edn.
+
+2. *~on-main~ boundary*: is the ~on-main~ wrap in the right place?  Each
+   ~make-*-vc~ fn calls ~on-main~ separately, causing three serial main-thread
+   hops.  Would a single ~on-main~ around the whole ~make-tab-bar!~ body be
+   cleaner and equally safe?
+
+3. *Atom shape*: does ~@app-state~ hold everything needed for future phases?
+   Add ~:map-view~ and ~:info-labels~ keys as ~nil~ placeholders now so later
+   phases ~swap!~ into an expected shape.
+
+4. *GreaseHook coupling*: using ~GreaseHook.shared.window~ to reach the
+   ~UIWindow~ is a workaround.  Note whether a pure-Clojure approach
+   (~UIApplication sharedApplication → keyWindow~) would be cleaner, and
+   whether UIKit.edn needs a ~keyWindow~ method with a ~UIWindow~ return type.
+
+5. *Naming*: ~make-tab-bar!~ is a side-effectful builder, not a factory.
+   Consider renaming to ~install-tab-bar!~ to signal the mutation intent.
+
+* Phase 2 — Map View
+
+Goal: the Map tab shows a full-screen ~MKMapView~, user location dot enabled,
+map centered on a placeholder coordinate (Apple HQ) until GPS is available.
+
+** TODO 2.1 Add ~MKMapView~ creation to ~demo_app.clj~
+
+#+begin_src clojure
+(defn install-map-view!
+  "Creates an MKMapView sized to fill map-vc's view and stores it in @app-state."
+  []
+  (on-main
+    (let [map-vc  (:map-vc @app-state)
+          root-v  (objc-rt/msg-send :pointer map-vc "view")
+          map-cls (objc-rt/get-class "MKMapView")
+          map-v   (objc-rt/msg-send :pointer map-cls "new")]
+      ;; Fill the parent view (zero frame set via C shim; autoresizing mask set separately)
+      (grease.ios.uikit/set-frame! map-v 0 0 414 896)
+      ;; Enable user location dot
+      (objc-rt/msg-send :void map-v "setShowsUserLocation:" :int8 1)
+      ;; Center on Apple HQ as placeholder
+      (demo-app.map/set-map-region! map-v 37.3346 -122.0090 0.05 0.05 false)
+      (objc-rt/msg-send :void root-v "addSubview:" :pointer map-v)
+      (swap! app-state assoc :map-view map-v))))
+#+end_src
+
+** TODO 2.2 Move map helpers into ~dev/demo_app/map.clj~
+
+Extract map-specific functions to keep ~demo_app.clj~ readable:
+
+#+begin_src clojure
+(ns demo-app.map
+  (:require [com.phronemophobic.grease :refer [ffi]]
+            [grease.ios.objc           :as objc-rt]))
+
+(defn set-map-region!
+  "Centers map-view on [lat lng] with given degree span.
+   Uses grease_set_map_region C shim (struct-arg bypass)."
+  [map-view lat lng lat-delta lng-delta animated?]
+  (ffi/call "grease_set_map_region" :void
+            :pointer map-view
+            :float64 lat  :float64 lng
+            :float64 lat-delta :float64 lng-delta
+            :int8 (if animated? 1 0)))
+
+(defn shows-user-location? [map-view]
+  (= 1 (objc-rt/msg-send :int8 map-view "showsUserLocation")))
+#+end_src
+
+** TODO 2.3 On-device smoke test
+
+#+begin_src clojure
+(install-map-view!)
+;; -> Map tab shows Apple HQ centered on a tile map
+;; -> Blue user-location dot appears if location permission already granted
+;; -> Tapping Info tab still works; Map tab retains MKMapView on return
+#+end_src
+
+Gate: map tiles load, ~showsUserLocation~ is true, no crash.
+
+** TODO 2.4 Phase 2 Architecture Review
+
+1. *Frame sizing*: ~grease.ios.uikit/set-frame!~ uses hardcoded 414×896
+   (iPhone XR points).  This breaks on any other screen size.  Evaluate:
+   a. Read screen bounds via ~UIScreen mainScreen → bounds~ (struct return
+      via C shim ~grease_get_screen_bounds_*~ — is it worth adding?).
+   b. Or set ~autoresizingMask~ to ~UIViewAutoresizingFlexibleWidth |
+      UIViewAutoresizingFlexibleHeight~ (~0x3F~) after ~addSubview:~ so the
+      frame is sized by UIKit automatically.
+   Decision: prefer autoresizingMask; document the ~0x3F~ constant.
+
+2. *Namespace split*: is the ~demo-app.map~ split sensible this early?
+   Only one function would live there in Phase 2.  Consider delaying the
+   split until Phase 3 when two or more map-specific functions exist.
+
+3. *UIKit.edn gaps*: ~addSubview:~ and ~setShowsUserLocation:~ are direct
+   ~objc-rt/msg-send~ calls.  ~addSubview:~ is in UIKit.edn; can it be
+   replaced with ~(ios/call root-v :add-subview map-v)~?  Check that the
+   engine coercion for a UIView argument (id type) works here.
+
+4. *MapKit.edn coverage*: ~setShowsUserLocation:~ should be in MapKit.edn.
+   Add it if missing and switch to ~(ios/call map-v :set-shows-user-location true)~.
+
+5. *Placeholder coordinates*: hardcoded Apple HQ lat/lng is fine for now.
+   Note that Phase 3 will replace this with the live location; the placeholder
+   should live in a ~(def default-region ...)~ rather than inline literals.
+
+* Phase 3 — CoreLocation → Map
+
+Goal: ~CLLocationManager~ running, map re-centers on each GPS fix,
+~@location~ atom always holds the latest ~CLLocation~.
+
+** TODO 3.1 Write ~dev/demo_app/location.clj~
+
+#+begin_src clojure
+(ns demo-app.location
+  (:require [grease.ios.api        :as ios]
+            [grease.ios.objc       :as objc-rt]
+            [grease.ios.foundation :as f]
+            [grease.ios.repl       :refer [on-main]]))
+
+(defonce location     (atom nil))
+(defonce location-mgr (atom {}))
+
+(defn- on-location-update
+  "Called by the delegate on each GPS fix.  Updates @location atom."
+  [_mgr locs]
+  (let [arr    (f/nsarray->vec locs)
+        latest (last arr)]
+    (reset! location latest)))
+
+(defn start!
+  "Initializes CLLocationManager, wires delegate, requests authorization, starts updates."
+  []
+  (on-main
+    (let [mgr (ios/make :location-manager)]
+      (ios/call mgr :request-when-in-use-authorization)
+      (ios/call mgr :set-delegate
+        {:location-manager-did-update-locations on-location-update
+         :location-manager-did-fail-with-error
+         (fn [_mgr err]
+           (println "CLLocation error:"
+                    (f/nsstring->str
+                     (objc-rt/msg-send :pointer err "localizedDescription"))))})
+      (ios/call mgr :start-updating-location)
+      (reset! location-mgr {:mgr mgr}))))
+
+(defn stop! []
+  (when-let [mgr (:mgr @location-mgr)]
+    (on-main (ios/call mgr :stop-updating-location))))
+#+end_src
+
+** TODO 3.2 Wire ~@location~ to the map in ~demo_app.clj~
+
+#+begin_src clojure
+(defn watch-location!
+  "Adds an atom watch that centers the map on every location update."
+  []
+  (add-watch location-mgr/location :map-follow
+    (fn [_ _ _ loc]
+      (when loc
+        (let [map-v   (:map-view @app-state)
+              lat     (objc-rt/msg-send :float64 loc "coordinate_latitude")
+              lng     (objc-rt/msg-send :float64 loc "coordinate_longitude")]
+          (on-main
+            (demo-app.map/set-map-region! map-v lat lng 0.01 0.01 true)))))))
+#+end_src
+
+Note: ~coordinate~ returns a ~CLLocationCoordinate2D~ struct.  Use the C shim
+approach until ~invoke/dispatch!~ handles the struct return on device for
+~CLLocation~.  Add two scalar accessors to Bridge.m:
+
+#+begin_src objc
+double grease_location_latitude(void *location) {
+    return ((__bridge CLLocation *)location).coordinate.latitude;
+}
+double grease_location_longitude(void *location) {
+    return ((__bridge CLLocation *)location).coordinate.longitude;
+}
+double grease_location_accuracy(void *location) {
+    return ((__bridge CLLocation *)location).horizontalAccuracy;
+}
+#+end_src
+
+** TODO 3.3 On-device integration test
+
+#+begin_src clojure
+(require '[demo-app.location :as loc])
+
+(loc/start!)
+;; -> Authorization dialog appears (or was already granted)
+;; -> After GPS fix (may take 10-20s outdoors):
+;;    @loc/location  ;; -> non-nil CLLocation pointer
+;;    (watch-location!)
+;;    ;; -> Map tab auto-centers on current position
+;;    ;; -> Map smoothly re-centers on each location update
+#+end_src
+
+Gate: ~@location~ non-nil; map centers on real device position.
+
+** TODO 3.4 Phase 3 Architecture Review
+
+1. *~coordinate~ struct return*: the current approach reads lat/lng via C
+   shims (~grease_location_latitude~, ~grease_location_longitude~).  Now that
+   Phase 10.2.4 landed ~invoke/dispatch!~ struct-return support, evaluate
+   whether ~(ios/call loc :coordinate)~ returns a ~{:latitude ... :longitude ...}~
+   map directly.  If it does, remove the C shims and use the map.
+
+2. *~on-location-update~ coupling*: the callback takes a raw ~CLLocation~
+   pointer.  Consider whether ~@location~ should store the raw pointer or a
+   Clojure map ~{:lat ... :lng ... :accuracy ... :timestamp ...}~.
+   Pros of Clojure map: info tab (Phase 4) has nothing to coerce.
+   Cons: loses the pointer (needed for CoreLocation distance calculations).
+   Decision: store both — ~{:ptr loc :lat ... :lng ... :accuracy ...}~.
+
+3. *Atom namespace split*: ~location~ and ~location-mgr~ are in
+   ~demo-app.location~; the map watch is in ~demo-app~ (root ns).  Is this
+   the right split?  Consider whether the watch should also live in
+   ~demo-app.location~ to keep all location-reaction logic in one namespace.
+
+4. *~add-watch~ key collision*: ~:map-follow~ is a bare keyword.  If
+   ~watch-location!~ is called twice, the old watch is silently replaced.
+   Add a guard: ~(when-not (get (.-watches @location) :map-follow) ...)~
+   or remove-watch before add-watch.
+
+5. *Heading / tracking mode*: ~setUserTrackingMode:animated:~ with
+   ~MKUserTrackingModeFollow~ (1) would auto-center the map natively without
+   the atom watch.  Note this as a potential simplification: if we set the
+   tracking mode, the ~add-watch~ + ~set-map-region!~ cycle is redundant.
+   Defer to Phase 4 polish.
+
+* Phase 4 — Info Tab + Polish
+
+Goal: the Info tab shows live lat/lon/accuracy/timestamp labels; map tracking
+mode is cleaned up; the full app reloads cleanly from REPL without crashing.
+
+** TODO 4.1 Write ~dev/demo_app/info.clj~
+
+#+begin_src clojure
+(ns demo-app.info
+  (:require [grease.ios.objc       :as objc-rt]
+            [grease.ios.foundation :as f]
+            [grease.ios.uikit      :as ui]
+            [grease.ios.repl       :refer [on-main]]))
+
+(defonce labels (atom {}))
+
+(defn- make-label
+  "Creates a centered UILabel with given y-position."
+  [text y-pos]
+  (on-main
+    (let [lbl (objc-rt/msg-send :pointer (objc-rt/get-class "UILabel") "new")]
+      (ui/set-frame! lbl 20 y-pos 374 44)
+      (ui/set-text! lbl text)
+      (ui/set-text-alignment! lbl 1)   ;; center
+      (ui/set-font-size! lbl 16)
+      lbl)))
+
+(defn install!
+  "Builds the Info tab label stack and installs it into info-vc's view."
+  [info-vc]
+  (on-main
+    (let [root-v (objc-rt/msg-send :pointer info-vc "view")
+          lat-l  (make-label "Lat: —" 120)
+          lng-l  (make-label "Lng: —" 172)
+          acc-l  (make-label "Accuracy: —" 224)
+          time-l (make-label "Time: —" 276)]
+      (doseq [l [lat-l lng-l acc-l time-l]]
+        (objc-rt/msg-send :void root-v "addSubview:" :pointer l))
+      (reset! labels {:lat lat-l :lng lng-l :accuracy acc-l :time time-l}))))
+
+(defn update-labels!
+  "Updates info labels from a location map {:lat :lng :accuracy :timestamp}."
+  [{:keys [lat lng accuracy]}]
+  (on-main
+    (let [{:keys [lat-l lng-l acc-l]} @labels]
+      (ui/set-text! lat-l  (format "Lat: %.6f" lat))
+      (ui/set-text! lng-l  (format "Lng: %.6f" lng))
+      (ui/set-text! acc-l  (format "Accuracy: ±%.0fm" accuracy)))))
+#+end_src
+
+** TODO 4.2 Wire ~@location~ watch to info labels
+
+In ~demo_app.clj~ or ~demo-app.location~:
+
+#+begin_src clojure
+(defn watch-info!
+  "Updates the Info tab whenever @location changes."
+  []
+  (add-watch demo-app.location/location :info-update
+    (fn [_ _ _ loc-map]
+      (when loc-map
+        (demo-app.info/update-labels! loc-map)))))
+#+end_src
+
+** TODO 4.3 Switch map to native tracking mode
+
+Replace the ~add-watch~ + ~set-map-region!~ cycle from Phase 3 with native
+MapKit tracking:
+
+#+begin_src clojure
+;; MKUserTrackingModeFollow = 1
+(objc-rt/msg-send :void map-v "setUserTrackingMode:animated:" :int64 1 :int8 1)
+#+end_src
+
+Remove ~watch-location!~ from ~demo_app.clj~ — the ~:map-follow~ watch is
+no longer needed.  Keep ~watch-info!~.
+
+Gate: map auto-follows user; Info tab updates with every GPS fix.
+
+** TODO 4.4 Write ~dev/demo_app/reload.clj~ — hot-reload helper
+
+#+begin_src clojure
+(ns demo-app.reload
+  (:require [demo-app          :as app]
+            [demo-app.location :as loc]
+            [demo-app.info     :as info]))
+
+(defn restart!
+  "Tears down all app state and rebuilds from scratch.
+   Call from nREPL when iterating on UI code."
+  []
+  (loc/stop!)
+  (remove-watch loc/location :info-update)
+  (reset! app/app-state {})
+  (reset! loc/location nil)
+  (reset! loc/location-mgr {})
+  (app/make-tab-bar!)
+  (app/install-map-view!)
+  (info/install! (:info-vc @app/app-state))
+  (loc/start!)
+  (app/watch-info!))
+#+end_src
+
+** TODO 4.5 Full end-to-end on-device test
+
+#+begin_src clojure
+(require '[demo-app.reload :as reload])
+(reload/restart!)
+;; -> App shows tab bar
+;; -> Map tab: map tiles load, blue dot appears, map follows user
+;; -> Info tab: lat/lng/accuracy update with each GPS fix
+;; -> Call (reload/restart!) again — no crash, fresh UI rebuilds correctly
+#+end_src
+
+Gate: double-restart without crash; live GPS data visible on Info tab.
+
+** TODO 4.6 Phase 4 Architecture Review — Final
+
+This is the polish gate before the demo is considered complete.
+
+*** 4.6.1 Idiomatic Clojure audit
+
+- [ ] Any ~def~ inside a function body?  Move to ~defonce~ at namespace level.
+- [ ] Any mutable state not in an atom?  If yes, why?
+- [ ] Any function longer than 20 lines?  Split it.
+- [ ] Naming: do side-effectful fns end in ~!~?  Do pure fns return nouns?
+- [ ] Are all public vars in ~src~ documented?  (~dev/~ files are exempt.)
+- [ ] Any bare ~println~ in callbacks?  Replace with a ~(defonce log (atom []))~
+      append so logs are inspectable after the fact.
+
+*** 4.6.2 Engine API coverage
+
+Review every ~objc-rt/msg-send~ call in the demo.  For each one:
+- Is the selector already in UIKit.edn or MapKit.edn?  If yes, replace with ~ios/call~.
+- If not, should it be added to the EDN?  Or is it a one-off that is fine as raw msg-send?
+
+Target: no raw ~msg-send~ for any selector that appears more than once.
+
+*** 4.6.3 C shim audit
+
+List all C shims added across Phases 0–3:
+| Shim                       | Reason                              | Replaceable by? |
+|----------------------------+-------------------------------------+-----------------|
+| ~grease_set_map_region~    | MKCoordinateRegion struct arg       | Phase 10 struct arg support |
+| ~grease_location_latitude~ | CLLocationCoordinate2D struct return | ios/call :coordinate (Phase 10.2.4) |
+| ~grease_location_longitude~| CLLocationCoordinate2D struct return | ios/call :coordinate (Phase 10.2.4) |
+| ~grease_location_accuracy~ | double scalar (could be msg-send)   | objc-rt/msg-send :float64 direct |
+
+Mark each shim's eventual replacement path so they can be removed in a
+future cleanup without archaeology.
+
+*** 4.6.4 Thread safety audit
+
+- [ ] Every UIKit call inside ~on-main~?
+- [ ] Every CLLocationManager call inside ~on-main~?
+- [ ] ~@location~ atom written from delegate callback (background thread) and
+  read from ~on-main~ — is this safe?  (Yes: atoms are thread-safe; the
+  watch fires on the writing thread.  Confirm that ~update-labels!~ wraps in
+  ~on-main~ before touching UIKit.)
+- [ ] ~@app-state~ written during ~make-tab-bar!~ on main thread and read
+  from the location watch callback on a background thread.  Since it is
+  read-only after setup, this is fine.  Add a comment to that effect.
+
+*** 4.6.5 Memory / ARC audit
+
+- [ ] ~tab-bar~, ~map-vc~, ~info-vc~, ~map-v~ — all held by ~@app-state~. ✓
+- [ ] ~CLLocationManager~ delegate — held by ~@location-mgr~. ✓
+- [ ] UILabel handles in ~@labels~ — held by ~@labels~. ✓
+- [ ] Any raw pointers returned from ~msg-send~ that are only in a ~let~
+  binding and not retained?  Delegates are the classic leak — double-check
+  that the ObjC class created by ~defclass!~ is in an atom.
+
+* Reference — Encoding Quick-Ref
+
+| ObjC Type           | Encoding | Notes                          |
+|---------------------+----------+--------------------------------|
+| ~void~              | ~v~      |                                |
+| ~id~ / pointer      | ~@~      | Any ObjC object                |
+| ~BOOL~              | ~B~      | Clojure ~true~/~false~         |
+| ~NSInteger~ (64-bit)| ~q~      |                                |
+| ~NSUInteger~        | ~Q~      |                                |
+| ~double~ / CGFloat  | ~d~      |                                |
+| ~float~             | ~f~      |                                |
+| Selector (hidden)   | ~:~      | Always in position 1           |
+| self (hidden)       | ~@~      | Always in position 0           |
+
+Full method encoding: ~{ret}@:{arg1}{arg2}...~
+Example: ~setRegion:animated:~ (void, struct, BOOL) → handled by C shim.
+
+* Key Files
+
+| File                                  | Purpose                                |
+|---------------------------------------+----------------------------------------|
+| ~dev/demo_app.clj~                    | App shell: tab bar, atom, watchers     |
+| ~dev/demo_app/map.clj~                | MKMapView helpers, ~set-map-region!~   |
+| ~dev/demo_app/location.clj~           | CLLocationManager, ~@location~ atom    |
+| ~dev/demo_app/info.clj~               | Info tab labels, ~update-labels!~      |
+| ~dev/demo_app/reload.clj~             | ~restart!~ hot-reload helper           |
+| ~resources/grease/api-specs/UIKit.edn~  | UITabBarController, UINavigationController |
+| ~resources/grease/api-specs/MapKit.edn~ | Hand-written MKMapView spec            |
+| ~resources/grease/structs.edn~        | MKCoordinateSpan, MKCoordinateRegion   |
+| ~xcode/MobileTest/csource/Bridge.m~   | ~grease_set_map_region~ + location shims |
