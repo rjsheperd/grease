@@ -226,3 +226,52 @@
       (is (contains? sels "startUpdatingLocation"))
       (is (contains? sels "requestWhenInUseAuthorization"))
       (is (contains? sels "stopUpdatingLocation")))))
+
+;; =============================================================================
+;; Phase 10.3.2 — struct-aware encoding in build-encoding
+;; =============================================================================
+
+(deftest ^:parallel build-encoding-cgpoint-return-test
+  (testing "CGPoint return emits compound struct encoding"
+    (is (= "{CGPoint=dd}@:" (normalize/build-encoding "CGPoint" [])))))
+
+(deftest ^:parallel build-encoding-cgsize-return-test
+  (testing "CGSize return emits compound struct encoding"
+    (is (= "{CGSize=dd}@:" (normalize/build-encoding "CGSize" [])))))
+
+(deftest ^:parallel build-encoding-cgrect-return-test
+  (testing "CGRect return emits nested compound struct encoding"
+    (is (= "{CGRect={CGPoint=dd}{CGSize=dd}}@:" (normalize/build-encoding "CGRect" [])))))
+
+(deftest ^:parallel build-encoding-cllocationcoordinate2d-return-test
+  (testing "CLLocationCoordinate2D return emits compound struct encoding"
+    (is (= "{CLLocationCoordinate2D=dd}@:" (normalize/build-encoding "CLLocationCoordinate2D" [])))))
+
+(deftest ^:parallel build-encoding-cmtime-return-test
+  (testing "CMTime return emits correct encoding for mixed primitive fields"
+    (is (= "{CMTime=qiIq}@:" (normalize/build-encoding "CMTime" [])))))
+
+(deftest ^:parallel build-encoding-cgpoint-arg-test
+  (testing "CGPoint as an argument emits compound struct encoding in args"
+    (is (= "v@:{CGPoint=dd}" (normalize/build-encoding "void" ["CGPoint"])))))
+
+;; =============================================================================
+;; Phase 10.3.2 — normalize-method-ref with struct return
+;; =============================================================================
+
+(def ^:private coordinate-ref
+  {:title     "coordinate"
+   :role      "symbol"
+   :kind      "symbol"
+   :fragments [{:kind "text"           :text "- ("}
+               {:kind "typeIdentifier" :text "CLLocationCoordinate2D"}
+               {:kind "text"           :text ") "}
+               {:kind "identifier"     :text "coordinate"}]})
+
+(deftest ^:parallel normalize-struct-return-method-test
+  (testing "normalize-method-ref with CLLocationCoordinate2D return"
+    (let [m (normalize/normalize-method-ref coordinate-ref)]
+      (is (= "coordinate" (:selector m)))
+      (is (= "CLLocationCoordinate2D" (:return m)))
+      (is (= "{CLLocationCoordinate2D=dd}@:" (:encoding m)))
+      (is (= [] (:args m))))))

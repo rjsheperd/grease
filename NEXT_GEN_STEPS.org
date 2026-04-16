@@ -815,7 +815,7 @@ Hand-crafted from Apple ARM64 ABI documentation.
 ~test/grease/ios/structs_test.clj~: loads file, checks required keys, resolves
 all field types (primitive or known struct), verifies :size = last-offset + last-size.
 
-** TODO 10.2 Struct coercion in ~grease.ios.types~
+** DONE 10.2 Struct coercion in ~grease.ios.types~
 
 Extend ~types/coerce-in~ and ~types/coerce-out~ to handle struct types:
 - ~coerce-in~: Clojure map ~{:x 0 :y 0 :width 100 :height 50}~ → packed byte buffer
@@ -846,26 +846,33 @@ Also fixed ~types_test.clj~ fixture to always call ~(f)~ so non-native tests run
 ~register-struct!~ also sets ~:coerce-out-fn~: ByteBuffer → ~structs/unpack~;
 Clojure map → identity; other values → identity (graceful).
 
-*** TODO 10.2.4 Update ~invoke/dispatch!~ for struct returns
+*** DONE 10.2.4 Update ~invoke/dispatch!~ for struct returns
 
-Detect struct return types in method spec and use ~objc_msgSend_stret~ for
-structs > 16 bytes.  Read returned memory into a ByteBuffer and call ~structs/unpack~.
+Uses ~ffi/call-ptr~ with a ~dt-struct~ CIF for struct-returning methods.  Handles
+HFA (≤16 bytes, float regs) and large structs (>16 bytes, x8 hidden pointer) on
+arm64.  ~registry/index-spec!~ now calls ~types/register-class!~ for each class so
+ObjC class return types (e.g. CLLocationManager) resolve in the oracle test.
+~api/load!~ calls ~types/register-struct!~ for all known structs after ~structs/init!~.
+198 tests, 0 failures.
 
-** TODO 10.3 Remove ~:unsupported true~ gates from scraped EDN
+** DONE 10.3 Remove ~:unsupported true~ gates from scraped EDN
 
-Re-run ~grease.scrape.normalize~ with struct types now resolvable.
-Methods previously tagged ~:unsupported true~ due to CGRect/CGPoint/etc.
-args get proper encoding and become callable.
+Scraper is now struct-aware.  ~grease.scrape.normalize~ loads ~structs.edn~
+at build time and emits compound ObjC encodings (~{CGPoint=dd}~, ~{CGRect={CGPoint=dd}{CGSize=dd}}~,
+etc.) for all known struct types.  Unknown types still fall back to id/@.
 
-Oracle check: before/after counts of ~:unsupported true~ methods per framework.
+*** DONE 10.3.1 Identify all ~:unsupported true~ methods in scraped EDN
 
-*** TODO 10.3.1 Identify all ~:unsupported true~ methods in scraped EDN
+No hand-written api-specs use ~:unsupported true~ (CoreLocation.edn coordinate
+method is now fully supported since Phase 10.2.4).  The scraped normalizer never
+tagged methods as ~:unsupported~; it fell back to ~id/@~ for unknown struct types.
 
-Count them per framework; identify which need struct support vs. other reasons.
+*** DONE 10.3.2 Re-run normalizer with struct-aware encoding
 
-*** TODO 10.3.2 Re-run normalizer with struct-aware encoding
-
-Update ~grease.scrape.normalize~ to emit proper encoding for struct-typed args/returns.
+Updated ~grease.scrape.normalize~ to load ~grease/structs.edn~ lazily via
+~io/resource~ and build recursive compound encodings via ~struct-enc~.
+~resolve-type~ now checks the struct registry before the id/@ fallback.
+8 new gate tests (struct returns + struct args) — 249 total, 0 failures.
 
 * Open Questions (from §9 of NEXT_GEN_ARCH.md)
 

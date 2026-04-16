@@ -10,18 +10,57 @@
   This namespace extracts :selector, :return, :encoding, and :args
   from those fragments and produces maps that pass [[grease.ios.spec/validate]].
 
+  Struct types (CGRect, CGPoint, CLLocationCoordinate2D, CMTime, etc.) are
+  resolved via [[resources/grease/structs.edn]] and emit compound ObjC
+  encodings such as ~{CGPoint=dd}~.  Unknown types fall back to id/@.
+
   Limitations (v1):
-  - Protocol-typed args (e.g. id<Delegate>) may default to \\\"id\\\"
-  - Struct-returning methods are not auto-tagged :unsupported; callers must
-    post-process if needed
+  - Protocol-typed args (e.g. id<Delegate>) may default to \"id\"
   - Deprecation tags require a separate pass over Apple's availability info
 
   Usage:
     (normalize-method-ref ref-map)     ;; -> grease method map
     (normalize-class-doc doc)          ;; -> grease class spec map
-    (framework->edn \\\"CoreLocation\\\")   ;; -> full EDN spec map"
-  (:require [clojure.string :as str]
+    (framework->edn \"CoreLocation\")   ;; -> full EDN spec map"
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [grease.scrape.apple-docs :as apple-docs]))
+
+;; =============================================================================
+;; Struct registry (Phase 10.3.2)
+;; =============================================================================
+
+(def ^:private struct-registry
+  "Lazy map of struct-name → spec loaded from grease/structs.edn."
+  (delay
+    (when-let [r (io/resource "grease/structs.edn")]
+      (into {} (map (fn [s] [(:name s) s]) (edn/read-string (slurp r)))))))
+
+(def ^:private prim-enc
+  "Maps structs.edn primitive type strings to ObjC encoding chars."
+  {"double" "d" "float"  "f"
+   "int64"  "q" "uint64" "Q"
+   "int32"  "i" "uint32" "I"
+   "int16"  "s" "uint16" "S"
+   "int8"   "c" "uint8"  "C"})
+
+(declare struct-enc)
+
+(defn- field-enc
+  "Returns the ObjC encoding string for one struct field type."
+  [field-type]
+  (or (get prim-enc field-type)
+      (when-let [nested (get @struct-registry field-type)]
+        (struct-enc (:name nested) nested))
+      "@"))
+
+(defn- struct-enc
+  "Returns the ObjC compound encoding ~{Name=f1f2...}~ for a known struct."
+  [struct-name spec]
+  (str "{" struct-name "="
+       (str/join (map #(field-enc (:type %)) (:fields spec)))
+       "}"))
 
 ;; =============================================================================
 ;; ObjC type → grease type mapping
@@ -30,35 +69,40 @@
 (def ^:private objc->grease
   "Maps common ObjC / C type names from Apple docs to grease type names
   (as defined in resources/grease/types.edn) and their single-char encodings."
-  {"void"              {:type "void"         :enc "v"}
-   "id"                {:type "id"           :enc "@"}
-   "instancetype"      {:type "id"           :enc "@"}
-   "BOOL"              {:type "BOOL"         :enc "B"}
-   "NSInteger"         {:type "NSInteger"    :enc "q"}
-   "NSUInteger"        {:type "NSUInteger"   :enc "Q"}
-   "int"               {:type "NSInteger"    :enc "q"}
-   "NSTimeInterval"    {:type "Double"       :enc "d"}
-   "CGFloat"           {:type "Double"       :enc "d"}
-   "double"            {:type "Double"       :enc "d"}
-   "float"             {:type "Float"        :enc "f"}
-   "NSString"          {:type "NSString"     :enc "@"}
-   "NSMutableString"   {:type "NSString"     :enc "@"}
-   "NSArray"           {:type "NSArray"      :enc "@"}
-   "NSMutableArray"    {:type "NSArray"      :enc "@"}
-   "NSDictionary"      {:type "NSDictionary" :enc "@"}
+  {"void"                {:type "void"         :enc "v"}
+   "id"                  {:type "id"           :enc "@"}
+   "instancetype"        {:type "id"           :enc "@"}
+   "BOOL"                {:type "BOOL"         :enc "B"}
+   "NSInteger"           {:type "NSInteger"    :enc "q"}
+   "NSUInteger"          {:type "NSUInteger"   :enc "Q"}
+   "int"                 {:type "NSInteger"    :enc "q"}
+   "NSTimeInterval"      {:type "Double"       :enc "d"}
+   "CGFloat"             {:type "Double"       :enc "d"}
+   "double"              {:type "Double"       :enc "d"}
+   "float"               {:type "Float"        :enc "f"}
+   "NSString"            {:type "NSString"     :enc "@"}
+   "NSMutableString"     {:type "NSString"     :enc "@"}
+   "NSArray"             {:type "NSArray"      :enc "@"}
+   "NSMutableArray"      {:type "NSArray"      :enc "@"}
+   "NSDictionary"        {:type "NSDictionary" :enc "@"}
    "NSMutableDictionary" {:type "NSDictionary" :enc "@"}
-   "NSURL"             {:type "NSURL"        :enc "@"}
-   "NSError"           {:type "NSError"      :enc "@"}
-   "NSNumber"          {:type "NSNumber"     :enc "@"}
-   "dispatch_queue_t"  {:type "id"           :enc "@"}})
+   "NSURL"               {:type "NSURL"        :enc "@"}
+   "NSError"             {:type "NSError"      :enc "@"}
+   "NSNumber"            {:type "NSNumber"     :enc "@"}
+   "dispatch_queue_t"    {:type "id"           :enc "@"}})
 
 (def ^:private fallback-type {:type "id" :enc "@"})
 
 (defn- resolve-type
   "Returns the grease {:type ... :enc ...} map for an ObjC type name.
-  Falls back to id/@ for unrecognised types."
+  Checks the static objc->grease table first, then the struct registry
+  (for CGRect, CLLocationCoordinate2D, etc.), then falls back to id/@."
   [objc-name]
-  (get objc->grease (str/trim (or objc-name "")) fallback-type))
+  (let [n (str/trim (or objc-name ""))]
+    (or (get objc->grease n)
+        (when-let [spec (get @struct-registry n)]
+          {:type n :enc (struct-enc n spec)})
+        fallback-type)))
 
 ;; =============================================================================
 ;; Fragment parsing
@@ -108,12 +152,13 @@
 (defn build-encoding
   "Builds an ObjC type encoding string from return-type name and arg-type names.
 
-  Format: {return-char}@:{arg-chars...}
-  Example: (build-encoding \"void\" [\"NSString\"]) => \"v@:@\""
+  Format: {return-enc}@:{arg-encs...}
+  Example: (build-encoding \"void\" [\"NSString\"]) => \"v@:@\"
+  Example: (build-encoding \"CGPoint\" []) => \"{CGPoint=dd}@:\""
   [return-type-name arg-type-names]
-  (let [ret-char  (:enc (resolve-type return-type-name))
-        arg-chars (map #(:enc (resolve-type %)) arg-type-names)]
-    (str ret-char "@:" (str/join arg-chars))))
+  (let [ret-enc  (:enc (resolve-type return-type-name))
+        arg-encs (map #(:enc (resolve-type %)) arg-type-names)]
+    (str ret-enc "@:" (str/join arg-encs))))
 
 ;; =============================================================================
 ;; Method reference normalization
@@ -129,25 +174,25 @@
   - Counts args via colons in the selector
   - Takes the first N typeIdentifier tokens after the return type
   - This may produce incorrect types for protocol-typed args (e.g. id<Delegate>);
-    those will default to \\\"id\\\" which is structurally valid"
+    those will default to \"id\" which is structurally valid"
   [reference-map]
-  (let [frags      (or (:fragments reference-map) [])
-        selector   (or (:title reference-map)
-                       (selector-from-fragments frags))
-        type-ids   (type-identifiers frags)
-        ret-name   (or (first type-ids) "id")
-        n          (n-args selector)
-        arg-names  (arg-names-from-fragments frags)
+  (let [frags         (or (:fragments reference-map) [])
+        selector      (or (:title reference-map)
+                          (selector-from-fragments frags))
+        type-ids      (type-identifiers frags)
+        ret-name      (or (first type-ids) "id")
+        n             (n-args selector)
+        arg-names     (arg-names-from-fragments frags)
         ;; Skip the first typeId (return type); take next n for args.
         ;; Pad with "id" if fragment data is incomplete — do NOT vec the padded
         ;; infinite seq; take n first to avoid OOM.
         raw-arg-types (vec (take n (rest type-ids)))
         arg-types     (vec (take n (concat raw-arg-types (repeat "id"))))
-        args       (mapv (fn [i]
-                           {:name (or (nth arg-names i nil)
-                                      (str "arg" i))
-                            :type (:type (resolve-type (nth arg-types i "id")))})
-                         (range n))]
+        args          (mapv (fn [i]
+                              {:name (or (nth arg-names i nil)
+                                         (str "arg" i))
+                               :type (:type (resolve-type (nth arg-types i "id")))})
+                            (range n))]
     {:selector selector
      :encoding (build-encoding ret-name arg-types)
      :return   (:type (resolve-type ret-name))
@@ -171,9 +216,9 @@
   "Converts a class documentation JSON map (as returned by apple-docs/class-doc)
   into a grease class spec map.
 
-  class-name is used as :name. superclass defaults to \\\"NSObject\\\".
+  class-name is used as :name. superclass defaults to \"NSObject\".
 
-  Method references with role \\\"symbol\\\" are normalised; the class's own
+  Method references with role \"symbol\" are normalised; the class's own
   self-reference (whose title == class-name) is excluded."
   [doc class-name]
   (let [all-refs  (->> (:references doc)
@@ -207,7 +252,7 @@
   "Fetches Apple docs JSON for framework-name and normalises it into a
   grease EDN spec map that passes grease.ios.spec/validate.
 
-  framework-name: case-insensitive, e.g. \\\"CoreLocation\\\"
+  framework-name: case-insensitive, e.g. \"CoreLocation\"
 
   Only classes whose class-doc page is accessible are included.
   Protocols and enums are not auto-scraped in v1 — add them by hand."
