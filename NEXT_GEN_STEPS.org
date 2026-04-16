@@ -492,7 +492,7 @@ Key methods (message-based, no structs):
 - ~UILabel text~ / ~setText:~ — property
 - ~UILabel setTextColor:~ / ~setFont:~ — method
 
-** TODO 4.2 UIKit REPL test
+** DONE 4.2 UIKit REPL test
 
 #+begin_src clojure
 (ios/load!)
@@ -533,19 +533,28 @@ Enum CBManagerState:
            {:name "powered-on"   :raw 5}]}
 #+end_src
 
-** TODO 5.2 CoreBluetooth REPL test
+** DONE 5.2 CoreBluetooth REPL test
+
+All 6 on-device tests pass (~tests/test_engine_corebluetooth.clj~):
+
+Key fixes required:
+- ~types.clj~: ~((@null-ptr-ref))~ double-call bug — delay stored Var, not fn; fixed
+  to store ~@v~ (the fn) so ~(@null-ptr-ref)~ is one call → correct ffi.Pointer.
+- Enum spec names: ~CoreBluetooth.edn~ (and ~AVFoundation.edn~) used full ObjC constant
+  names (e.g. ~"CBManagerStatePoweredOn"~) but naming rule ~:camel->kebab-keyword~ expects
+  short camelCase (e.g. ~"poweredOn"~). Changed enum ~:name~ values to short form so
+  ~(api/enum "CBManagerState" :powered-on)~ resolves to 5 correctly.
+- Delegate map keys: must be Clojure kebab-case keywords
+  (e.g. ~:central-manager-did-update-state~), not ObjC selector strings.
 
 #+begin_src clojure
-(def bt-state (atom nil))
-
-(ios/make :central-manager
-          {:delegate {:on-central-manager-did-update-state:
-                      (fn [_self _cmd mgr]
-                        (reset! bt-state (ios/get-prop mgr :state)))}
-           :queue (grease.ios.foundation/main-queue)})
-
-(deref (promise) 2000 nil)
-@bt-state  ; => :powered-on (or :powered-off / :unauthorized)
+;; All pass via: clj -M tests/test_engine_corebluetooth.clj
+;; 1. CoreBluetooth spec loaded in registry      => true
+;; 2. CBCentralManager alloc returns ObjcObject  => true
+;; 3. initWithDelegate:queue: wires without error => :ok
+;; 4. centralManagerDidUpdateState: fires ≤3s    => :got-state
+;; 5. CBPeripheral class spec available           => true
+;; 6. CBManagerState :powered-on resolves to 5   => 5
 #+end_src
 
 * Phase 6 — Scraper (Steps 11–12): EDN from Apple docs JSON

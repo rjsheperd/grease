@@ -125,12 +125,14 @@
 
  :enums
  [{:name   "CBManagerState"
+   ;; Short camelCase names — the naming rule strips class prefix before converting to :kebab-keyword.
+   ;; Full ObjC constants: CBManagerStateUnknown, …PoweredOn, etc.
    :values
-   [{:name "CBManagerStateUnknown"      :raw 0}
-    {:name "CBManagerStateResetting"    :raw 1}
-    {:name "CBManagerStateUnsupported"  :raw 2}
-    {:name "CBManagerStateUnauthorized" :raw 3}
-    {:name "CBManagerStatePoweredOff"   :raw 4}
-    {:name "CBManagerStatePoweredOn"    :raw 5}]}]
+   [{:name "unknown"      :raw 0}
+    {:name "resetting"    :raw 1}
+    {:name "unsupported"  :raw 2}
+    {:name "unauthorized" :raw 3}
+    {:name "poweredOff"   :raw 4}
+    {:name "poweredOn"    :raw 5}]}]
 
  :constants []}

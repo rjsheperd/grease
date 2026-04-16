@@ -63,8 +63,11 @@
 
 ;; Lazily resolved reference to grease.ios.foundation/null-ptr.
 ;; Deferred until first use so load order between types and foundation is flexible.
+;; NOTE: we deref the Var (with @v) to store the function, not the Var itself.
+;; Storing the Var would require two calls: once to deref the Var, once to invoke it.
+;; Storing the function (@v) means (@null-ptr-ref) is a single call → ffi.Pointer.
 (def ^:private null-ptr-ref
-  (delay (or (resolve 'grease.ios.foundation/null-ptr)
+  (delay (or (when-let [v (resolve 'grease.ios.foundation/null-ptr)] @v)
              (throw (ex-info "Cannot resolve grease.ios.foundation/null-ptr — load foundation first" {})))))
 
 (defn init!
@@ -108,8 +111,8 @@
       (throw (ex-info (str "Unknown type in coerce-in: " type-name)
                       {:type-name type-name})))
     (if (and (= "@" (:encoding entry)) (nil? value))
-      ;; nil pointer: call cached null-ptr helper (avoids requiring-resolve on hot path)
-      ((@null-ptr-ref))
+      ;; nil pointer: call cached null-ptr function (avoids requiring-resolve on hot path)
+      (@null-ptr-ref)
       ((:coerce-in-fn entry) value))))
 
 (defn coerce-out

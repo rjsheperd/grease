@@ -141,10 +141,12 @@
 
  :enums
  [{:name   "AVAuthorizationStatus"
+   ;; Short camelCase names per naming.edn :enum-val convention.
+   ;; Full ObjC: AVAuthorizationStatusNotDetermined, …Restricted, …Denied, …Authorized.
    :values
-   [{:name "AVAuthorizationStatusNotDetermined" :raw 0}
-    {:name "AVAuthorizationStatusRestricted"    :raw 1}
-    {:name "AVAuthorizationStatusDenied"        :raw 2}
-    {:name "AVAuthorizationStatusAuthorized"    :raw 3}]}]
+   [{:name "notDetermined" :raw 0}
+    {:name "restricted"    :raw 1}
+    {:name "denied"        :raw 2}
+    {:name "authorized"    :raw 3}]}]
 
  :constants []}
