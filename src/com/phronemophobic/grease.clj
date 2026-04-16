@@ -203,8 +203,12 @@
 
 (def ^:private opts
   (-> {:classes {:allow :all
-                 'System       java.lang.System
-                 'java.net.URL java.net.URL}
+                 'System              java.lang.System
+                 'java.net.URL        java.net.URL
+                 'ByteBuffer          java.nio.ByteBuffer
+                 'java.nio.ByteBuffer java.nio.ByteBuffer
+                 'ByteOrder           java.nio.ByteOrder
+                 'java.nio.ByteOrder  java.nio.ByteOrder}
        :namespaces
        (merge
          ;; objcjure -- expose all public vars, rebind `objc` to SCI-aware wrapper
@@ -276,12 +280,14 @@
       ;; Wrapped in try-catch so that a load error is logged but does not
       ;; prevent the nREPL from starting.
       (try
-        (doseq [path ["grease/ios/types.clj"
+        (doseq [path ["grease/ios/structs.clj"
+                      "grease/ios/types.clj"
                       "grease/ios/naming.clj"
                       "grease/ios/spec.clj"
                       "grease/ios/registry.clj"
                       "grease/ios/patterns.clj"
                       "grease/ios/invoke.clj"
+                      "grease/ios/coerce.clj"
                       "grease/ios/api.clj"]]
           (if-let [src (io/resource path)]
             (sci/eval-string* ctx (slurp src))
