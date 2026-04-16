@@ -188,18 +188,20 @@ Add missing classes to the hand-written ~resources/grease/api-specs/UIKit.edn~:
 
 Gate: oracle test passes; all new selectors findable by registry.
 
-** TODO 0.5 Full rebuild + deploy
+** IN-PROGRESS 0.5 Full rebuild + deploy
 
 #+begin_src bash
 rm -rf build/bb build/bb-tmp target conf/capcache
-./scripts/build-bb-o
-direnv exec . ./scripts/build-demo-app
+./scripts/build-bb-o                         ;; DONE — bb.o 152M built 2026-04-16
+direnv exec . ./scripts/build-demo-app        ;; BLOCKED — device not connected
 pkill -f ios-deploy 2>/dev/null && ./scripts/deploy-demo-app
 ./scripts/debug-demo-app --noinstall
 #+end_src
 
 Gate: app starts without crash; ~(require '[grease.ios.api :as ios])~ works
 in nREPL; ~(ios/load!)~ loads all specs without error.
+
+*Next action*: connect device via USB, then run the three remaining steps.
 
 ** DONE 0.6 Phase 0 Architecture Review
 
