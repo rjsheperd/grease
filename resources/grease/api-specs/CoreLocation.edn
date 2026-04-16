@@ -76,14 +76,15 @@
      :args     []
      :return   "id"
      :doc      "Returns NSDate pointer — use NSDate methods to extract time"}
-    ;; coordinate returns a CLLocationCoordinate2D struct — not supported via
-    ;; plain objc_msgSend; use C shims (grease_location_latitude / _longitude).
+    ;; coordinate returns CLLocationCoordinate2D (16 bytes, 2 doubles).
+    ;; On arm64 this is a HFA (Homogeneous Floating-point Aggregate) returned
+    ;; in d0/d1.  invoke/dispatch! uses ffi/call-ptr with a dt-struct type
+    ;; so libffi handles the HFA calling convention correctly.
     {:selector "coordinate"
-     :encoding "@@:"
+     :encoding "{CLLocationCoordinate2D=dd}@:"
      :args     []
-     :return   "id"
-     :unsupported true
-     :doc      "CLLocationCoordinate2D struct — use C shims for latitude/longitude"}]
+     :return   "CLLocationCoordinate2D"
+     :doc      "Returns CLLocationCoordinate2D {:latitude double :longitude double}"}]
    :properties []}]
 
  :protocols

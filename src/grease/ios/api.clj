@@ -18,6 +18,7 @@
             [grease.ios.naming :as naming]
             [grease.ios.patterns :as patterns]
             [grease.ios.registry :as registry]
+            [grease.ios.structs :as structs]
             [grease.ios.types :as types]))
 
 ;; =============================================================================
@@ -69,9 +70,10 @@
 ;; =============================================================================
 
 (defn load!
-  "Initialises the engine: loads naming rules, type bridge, and all specs.
-  Must be called before any other api function."
+  "Initialises the engine: loads struct layouts, naming rules, type bridge,
+  and all specs.  Must be called before any other api function."
   []
+  (structs/init!)
   (naming/init!)
   (types/init!)
   (registry/load-all!))

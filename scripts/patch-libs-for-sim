@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/patch-libs-for-sim
+#
+# Patch iOS arm64 static libraries to the iOS Simulator (iossim) Mach-O
+# platform tag so they can be linked into a simulator app build.
+#
+# arm64 code is ABI-compatible between iOS device and iOS Simulator — only
+# the Mach-O LC_BUILD_VERSION / LC_VERSION_MIN_IPHONEOS platform tag differs.
+# vtool rewrites each .o member; for objects whose header is too small to hold
+# LC_BUILD_VERSION (8 bytes larger than LC_VERSION_MIN_IPHONEOS), we fall back
+# to a binary patch that replaces LC_VERSION_MIN_IPHONEOS with LC_SOURCE_VERSION
+# (same cmdsize=16, neutral metadata ignored by the platform check).
+#
+# Inputs (iOS device tagged):
+#   lib/ios-arm64/*.a
+#   build/staticjdk-ios-jdk21/lib/static/*.a
+#   xcode/MobileTest/aarch64-apple-ios/.libs/libffi.a
+#
+# Outputs (iossim tagged):
+#   lib/ios-sim-arm64/   (patched copies of ios-arm64 libs + libffi)
+#   build/staticjdk-iossim-jdk21/lib/static/
+#
+# Usage:
+#   ./scripts/patch-libs-for-sim
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd -P )"
+PROJECT_DIR="$DIR/.."
+
+SIM_MINOS="16.0"
+SIM_SDK="16.0"
+
+# Output dirs
+SIM_LIBS_DIR="$PROJECT_DIR/lib/ios-sim-arm64"
+SIM_STATIC_DIR="$PROJECT_DIR/build/staticjdk-iossim-jdk21/lib/static"
+
+mkdir -p "$SIM_LIBS_DIR" "$SIM_STATIC_DIR"
+
+# =============================================================================
+# patch_archive <src.a> <dst.a>
+#
+# Extracts all .o members, runs vtool to set iossim platform on each, then
+# repacks into a new archive with a fresh symbol table.
+# =============================================================================
+
+patch_archive() {
+    local src="$1"
+    local dst="$2"
+
+    if [ ! -f "$src" ]; then
+        echo "  SKIP (not found): $src"
+        return
+    fi
+
+    local name
+    name="$(basename "$dst")"
+
+    # Only re-patch if src is newer than dst
+    if [ -f "$dst" ] && [ "$dst" -nt "$src" ]; then
+        echo "  up-to-date: $name"
+        return
+    fi
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Extract archive members
+    (cd "$tmpdir" && ar x "$src" 2>/dev/null)
+
+    local count=0
+    local fallback=0
+    for obj in "$tmpdir"/*.o; do
+        [ -f "$obj" ] || continue
+        if vtool -set-build-version iossim "$SIM_MINOS" "$SIM_SDK" \
+                 -replace -output "$obj" "$obj" 2>/dev/null; then
+            : # vtool succeeded
+        else
+            # Header too tight for LC_BUILD_VERSION (8 bytes larger than
+            # LC_VERSION_MIN_IPHONEOS). Binary-patch cmd 0x25 → 0x2A
+            # (LC_SOURCE_VERSION), which is neutral and the same 16 bytes.
+            python3 - "$obj" << 'PYEOF'
+import sys, struct
+with open(sys.argv[1], 'rb') as f:
+    data = bytearray(f.read())
+pos = 32
+while pos < len(data) - 4:
+    if data[pos:pos+4] == struct.pack('<I', 0x25):
+        if struct.unpack_from('<I', data, pos+4)[0] == 16:
+            data[pos:pos+4] = struct.pack('<I', 0x2A)
+            break
+    pos += 1
+with open(sys.argv[1], 'wb') as f:
+    f.write(data)
+PYEOF
+            fallback=$((fallback + 1))
+        fi
+        count=$((count + 1))
+    done
+
+    # Repack with updated symbol table
+    # libtool -static handles the __.SYMDEF properly on macOS
+    libtool -static -o "$dst" "$tmpdir"/*.o 2>/dev/null \
+        || ar crs "$dst" "$tmpdir"/*.o
+
+    rm -rf "$tmpdir"
+    if [ "$fallback" -gt 0 ]; then
+        echo "  patched ($count objects, $fallback via binary fallback): $name"
+    else
+        echo "  patched ($count objects): $name"
+    fi
+}
+
+# =============================================================================
+# Main: patch each library group
+# =============================================================================
+
+echo "=== Patching lib/ios-arm64/ → lib/ios-sim-arm64/ ==="
+for lib in "$PROJECT_DIR/lib/ios-arm64/"*.a; do
+    [ -f "$lib" ] || continue
+    patch_archive "$lib" "$SIM_LIBS_DIR/$(basename "$lib")"
+done
+
+echo ""
+echo "=== Patching libffi.a → lib/ios-sim-arm64/libffi.a ==="
+LIBFFI_SRC="$PROJECT_DIR/xcode/MobileTest/aarch64-apple-ios/.libs/libffi.a"
+patch_archive "$LIBFFI_SRC" "$SIM_LIBS_DIR/libffi.a"
+
+echo ""
+echo "=== Patching staticjdk-ios-jdk21 → staticjdk-iossim-jdk21 ==="
+STATIC_SRC="$PROJECT_DIR/build/staticjdk-ios-jdk21/lib/static"
+if [ -d "$STATIC_SRC" ]; then
+    for lib in "$STATIC_SRC/"*.a; do
+        [ -f "$lib" ] || continue
+        patch_archive "$lib" "$SIM_STATIC_DIR/$(basename "$lib")"
+    done
+else
+    echo "  SKIP: $STATIC_SRC not found (run scripts/build-ios-static-libs first)"
+fi
+
+echo ""
+echo "================================================================"
+echo "  patch-libs-for-sim complete"
+echo "================================================================"
+echo ""
+echo "  Simulator libs: $SIM_LIBS_DIR"
+echo "  Simulator static: $SIM_STATIC_DIR"
+echo ""
+echo "  Next: ./scripts/build-demo-app-sim"
+echo ""

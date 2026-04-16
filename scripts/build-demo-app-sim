@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/build-demo-app-sim
+#
+# Build the MobileTest iOS app for the iOS Simulator via xcodebuild.
+# Reuses the existing bb.o (which has no Mach-O platform tag and is therefore
+# compatible with both device and simulator builds).
+#
+# Requires scripts/patch-libs-for-sim to have been run first to produce
+# simulator-tagged versions of libjava.a, libjvm.a, libffi.a, etc.
+#
+# Environment variables:
+#   XCODE_DEVELOPER_DIR  Xcode Developer dir (default: xcode-select -p output)
+#   SIM_NAME             Simulator name (default: iPhone 16)
+#   IOS_TARGET           iOS deployment target (default: 16.0)
+#   CONFIGURATION        Debug or Release (default: Debug)
+#
+# Usage:
+#   ./scripts/build-demo-app-sim
+#   SIM_NAME="iPhone 14" ./scripts/build-demo-app-sim
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd -P )"
+PROJECT_DIR="$DIR/.."
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+SIM_NAME="${SIM_NAME:-iPhone 16}"
+IOS_TARGET="${IOS_TARGET:-16.0}"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+DESTINATION="platform=iOS Simulator,name=$SIM_NAME"
+
+# Use active xcode-select unless explicitly overridden
+XCODE_DEVELOPER_DIR="${XCODE_DEVELOPER_DIR:-$(xcode-select -p 2>/dev/null)}"
+XCODEBUILD="$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild"
+XCODE_CLANG="$XCODE_DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+
+XCODE_PROJECT="$PROJECT_DIR/xcode/MobileTest/MobileTest.xcodeproj"
+XCODE_SCHEME="MobileTest"
+
+BB_DIR="$PROJECT_DIR/build/bb"
+SIM_LIBS_DIR="$PROJECT_DIR/lib/ios-sim-arm64"
+SIM_STATIC_DIR="$PROJECT_DIR/build/staticjdk-iossim-jdk21/lib/static"
+DERIVED_DATA="$PROJECT_DIR/build/DerivedData-sim"
+
+XCCONFIG="$PROJECT_DIR/build/demo-app-sim.xcconfig"
+
+# =============================================================================
+# Prerequisite checks
+# =============================================================================
+
+echo "=== Checking prerequisites ==="
+
+if [ ! -f "$BB_DIR/bb.o" ]; then
+    echo "ERROR: $BB_DIR/bb.o not found."
+    echo "  Run ./scripts/build-bb-o first."
+    exit 1
+fi
+
+if [ ! -f "$BB_DIR/bb.h" ]; then
+    echo "ERROR: $BB_DIR/bb.h not found."
+    echo "  Run ./scripts/build-bb-o first."
+    exit 1
+fi
+
+if [ ! -f "$SIM_LIBS_DIR/libjava.a" ] || [ ! -f "$SIM_LIBS_DIR/libjvm.a" ]; then
+    echo "ERROR: simulator libs not found at $SIM_LIBS_DIR"
+    echo "  Run ./scripts/patch-libs-for-sim first."
+    exit 1
+fi
+
+if [ ! -f "$SIM_LIBS_DIR/libffi.a" ]; then
+    echo "ERROR: simulator libffi not found at $SIM_LIBS_DIR/libffi.a"
+    echo "  Run ./scripts/patch-libs-for-sim first."
+    exit 1
+fi
+
+if [ ! -d "$XCODE_PROJECT" ]; then
+    echo "ERROR: Xcode project not found at $XCODE_PROJECT"
+    exit 1
+fi
+
+echo "  bb.o:        $BB_DIR/bb.o ($(du -sh "$BB_DIR/bb.o" | cut -f1))"
+echo "  sim libs:    $SIM_LIBS_DIR"
+echo "  config:      $CONFIGURATION"
+echo "  destination: $DESTINATION"
+echo "  xcode:       $XCODE_DEVELOPER_DIR"
+echo ""
+
+# =============================================================================
+# Step 1: Stage bb.o and headers
+# =============================================================================
+
+echo "=== Step 1: Staging bb.o and headers ==="
+
+GREASE_LIBRARY_OUT="$PROJECT_DIR/library/build/out"
+GREASE_LIBRARY="$PROJECT_DIR/library"
+
+mkdir -p "$GREASE_LIBRARY_OUT"
+
+ln -snf "$BB_DIR/bb.o" "$GREASE_LIBRARY_OUT/bb.o"
+echo "  symlinked: $GREASE_LIBRARY_OUT/bb.o -> $BB_DIR/bb.o"
+
+for header in bb.h bb_dynamic.h graal_isolate.h graal_isolate_dynamic.h; do
+    if [ -f "$BB_DIR/$header" ]; then
+        ln -snf "$BB_DIR/$header" "$GREASE_LIBRARY/$header"
+        echo "  symlinked: $GREASE_LIBRARY/$header -> $BB_DIR/$header"
+    fi
+done
+
+# =============================================================================
+# Step 2: Write demo-app-sim.xcconfig
+# =============================================================================
+
+echo ""
+echo "=== Step 2: Writing demo-app-sim.xcconfig ==="
+
+mkdir -p "$PROJECT_DIR/build"
+
+# Resolve the simulator SDK path. The macOS linker implicitly searches the
+# CommandLineTools macOS SDK even when -isysroot points at iPhoneSimulator,
+# and finds macOS-tagged TBDs before the correct simulator ones. Xcode strips
+# explicit -L<sysroot>/usr/lib flags (even with -Wl,). Workaround: copy the
+# simulator SDK's TBD stubs to a project-local directory that Xcode won't
+# recognize as the SDK root, so -L passes through to the linker unfiltered.
+SIM_SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null)"
+SIM_STUBS_DIR="$PROJECT_DIR/build/sim-sys-stubs"
+# Always regenerate as a plain directory (remove stale symlinks or old copies).
+rm -rf "$SIM_STUBS_DIR"
+mkdir -p "$SIM_STUBS_DIR"
+if [ -n "$SIM_SDK_PATH" ] && [ -d "$SIM_SDK_PATH/usr/lib" ]; then
+    cp "$SIM_SDK_PATH/usr/lib/"*.tbd "$SIM_STUBS_DIR/" 2>/dev/null || true
+    echo "  sim-sys-stubs: copied $(ls "$SIM_STUBS_DIR"/*.tbd 2>/dev/null | wc -l | tr -d ' ') TBD stubs"
+fi
+
+OTHER_LDFLAGS="-ljava"
+OTHER_LDFLAGS+=" -ljvm"
+OTHER_LDFLAGS+=" -lios_jdk_stubs"
+OTHER_LDFLAGS+=" -lzip -lprefs -lj2pkcs11"
+OTHER_LDFLAGS+=" -lffi"
+# Omit -lz -ldl -lpthread -lstdc++: these system libs are re-exported by
+# the iOS Simulator SDK's libSystem umbrella and are found correctly via
+# the sysroot when not named explicitly. Explicit -l flags resolve against
+# the CommandLineTools macOS SDK first, causing a platform mismatch error.
+# Put the staged simulator TBD stubs first so the linker finds simulator-tagged
+# libobjc.tbd before the macOS one in the CommandLineTools SDK.
+OTHER_LDFLAGS+=" -L$SIM_STUBS_DIR"
+OTHER_LDFLAGS+=" -Wl,-framework,Foundation"
+OTHER_LDFLAGS+=" -Wl,-framework,UIKit"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreGraphics"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreText"
+OTHER_LDFLAGS+=" -Wl,-framework,QuartzCore"
+OTHER_LDFLAGS+=" -Wl,-framework,ImageIO"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreBluetooth"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreImage"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreLocation"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMedia"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreMotion"
+OTHER_LDFLAGS+=" -Wl,-framework,CoreVideo"
+OTHER_LDFLAGS+=" -Wl,-framework,Accelerate"
+OTHER_LDFLAGS+=" -Wl,-framework,AVFoundation"
+OTHER_LDFLAGS+=" -Wl,-framework,AudioToolbox"
+OTHER_LDFLAGS+=" -Wl,-framework,UserNotifications"
+OTHER_LDFLAGS+=" -Wl,-framework,AVKit"
+OTHER_LDFLAGS+=" -Wl,-framework,SceneKit"
+OTHER_LDFLAGS+=" -Wl,-framework,StoreKit"
+OTHER_LDFLAGS+=" -Wl,-framework,ModelIO"
+OTHER_LDFLAGS+=" -Wl,-framework,WebKit"
+# Note: ARKit, MediaPlayer, MobileCoreServices, OpenGLES are not included —
+# these are unavailable or deprecated in the iOS Simulator SDK.
+OTHER_LDFLAGS+=" -L$SIM_LIBS_DIR"
+if [ -d "$SIM_STATIC_DIR" ]; then
+    OTHER_LDFLAGS+=" -L$SIM_STATIC_DIR"
+fi
+
+cat > "$XCCONFIG" << EOF
+// demo-app-sim.xcconfig — generated by grease/scripts/build-demo-app-sim — do not edit manually
+
+SDKROOT = iphonesimulator
+IPHONEOS_DEPLOYMENT_TARGET = $IOS_TARGET
+
+CC = $XCODE_CLANG
+CXX = ${XCODE_CLANG}++
+
+LIBRARY_SEARCH_PATHS = $SIM_STUBS_DIR $SIM_LIBS_DIR $SIM_STATIC_DIR $BB_DIR
+
+HEADER_SEARCH_PATHS = \$(inherited) $BB_DIR
+
+OTHER_LDFLAGS = $OTHER_LDFLAGS
+
+EXCLUDED_SOURCE_FILE_NAMES = JvmFuncsFallbacks.c
+
+CODE_SIGNING_REQUIRED = NO
+CODE_SIGNING_ALLOWED = NO
+EOF
+
+echo "  xcconfig: $XCCONFIG"
+
+# =============================================================================
+# Step 3: Build with xcodebuild
+# =============================================================================
+
+echo ""
+echo "=== Step 3: xcodebuild $XCODE_SCHEME ($CONFIGURATION, simulator) ==="
+echo "  Destination: $DESTINATION"
+echo "  Started: $(date)"
+
+export DEVELOPER_DIR="$XCODE_DEVELOPER_DIR"
+
+"$XCODEBUILD" \
+    -project            "$XCODE_PROJECT" \
+    -scheme             "$XCODE_SCHEME" \
+    -configuration      "$CONFIGURATION" \
+    -sdk                iphonesimulator \
+    -destination        "$DESTINATION" \
+    -xcconfig           "$XCCONFIG" \
+    -derivedDataPath    "$DERIVED_DATA" \
+    CC="$XCODE_CLANG" \
+    CXX="${XCODE_CLANG}++" \
+    SDKROOT=iphonesimulator \
+    SUPPORTED_PLATFORMS="iphonesimulator iphoneos" \
+    ARCHS=arm64 \
+    ONLY_ACTIVE_ARCH=NO \
+    EXCLUDED_ARCHS=x86_64 \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=NO \
+    DEVELOPMENT_TEAM="" \
+    build
+
+echo "  Finished: $(date)"
+
+# =============================================================================
+# Report output
+# =============================================================================
+
+BUILT_PRODUCTS_DIR=$("$XCODEBUILD" \
+    -project            "$XCODE_PROJECT" \
+    -scheme             "$XCODE_SCHEME" \
+    -configuration      "$CONFIGURATION" \
+    -sdk                iphonesimulator \
+    -destination        "$DESTINATION" \
+    -derivedDataPath    "$DERIVED_DATA" \
+    -showBuildSettings 2>/dev/null \
+    | grep '^\s*BUILT_PRODUCTS_DIR' \
+    | head -1 \
+    | awk -F' = ' '{print $2}' \
+    | xargs)
+
+echo ""
+echo "================================================================"
+echo "  Simulator app build complete"
+echo "================================================================"
+echo ""
+if [ -n "$BUILT_PRODUCTS_DIR" ] && [ -d "$BUILT_PRODUCTS_DIR" ]; then
+    echo "  App bundle:"
+    ls "$BUILT_PRODUCTS_DIR"/*.app 2>/dev/null | sed 's/^/    /'
+fi
+echo ""
+echo "  Next: ./scripts/sim-run"
+echo ""

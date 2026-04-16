@@ -16,10 +16,12 @@
             [grease.ios.mock-bridge :as mock]
             [grease.ios.naming :as naming]
             [grease.ios.registry :as registry]
+            [grease.ios.structs :as structs]
             [grease.ios.types :as types]))
 
 (use-fixtures :once
   (fn [f]
+    (structs/init!)
     (naming/init!)
     (types/init!)
     (registry/load-all!)
@@ -218,3 +220,32 @@
           count-m (registry/method-spec "NSArray" "count")
           cnt     (invoke/dispatch! arr-ptr "count" count-m [])]
       (is (= 1 cnt)))))
+
+;; =============================================================================
+;; Phase 10.2.4 — struct-return detection
+;;
+;; Verifies that dispatch! correctly identifies struct-returning methods and
+;; that the struct registry is populated after structs/init! is called.
+;; The actual stret call path is exercised on-device via test_engine_phase9_10.clj.
+;; =============================================================================
+
+(deftest dispatch-struct-return-detection-test
+  (testing "structs/known-struct? correctly identifies CLLocationCoordinate2D"
+    ;; structs/init! is called in the :once fixture
+    (is (true? (structs/known-struct? "CLLocationCoordinate2D")))
+    (is (true? (structs/known-struct? "CGPoint")))
+    (is (true? (structs/known-struct? "CGRect")))
+    (is (false? (structs/known-struct? "NSString")))
+    (is (false? (structs/known-struct? "id"))))
+
+  (testing "CoreLocation.edn coordinate method has CLLocationCoordinate2D return type"
+    (let [m (registry/method-spec "CLLocation" "coordinate")]
+      (is (some? m) "coordinate method exists in registry")
+      (is (= "CLLocationCoordinate2D" (:return m)))))
+
+  (testing "CLLocationCoordinate2D struct spec has correct fields"
+    (let [spec (structs/struct-for "CLLocationCoordinate2D")]
+      (is (= 16 (:size spec)))
+      (is (= 2 (count (:fields spec))))
+      (is (= "latitude" (:name (first (:fields spec)))))
+      (is (= "longitude" (:name (second (:fields spec))))))))

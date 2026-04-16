@@ -229,6 +229,7 @@ export DEVELOPER_DIR="$XCODE_DEVELOPER_DIR"
     -allowProvisioningUpdates \
     CC="$XCODE14_CLANG" \
     CXX="${XCODE14_CLANG}++" \
+    SDKROOT=iphoneos \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \
     build

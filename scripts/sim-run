@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/sim-run
+#
+# Boot the iOS Simulator, install the MobileTest app, launch it, and wait
+# until the babashka nREPL opens on localhost:NREPL_PORT.
+#
+# After this script returns, connect with:
+#   clj -Sdeps '{"deps" {"nrepl/nrepl" {"mvn/version" "1.3.0"}}}' \
+#       -M -m nrepl.cmdline --connect --host localhost --port 23456
+# Or run the test suite:
+#   NREPL_HOST=localhost NREPL_PORT=23456 tests/run_tests
+#
+# Environment variables:
+#   SIM_NAME      Simulator name (default: iPhone 16)
+#   BUNDLE_ID     App bundle identifier (default: com.rjsheperd.MobileTest)
+#   NREPL_PORT    Port to wait on (default: 23456)
+#   CONFIGURATION Debug or Release (default: Debug)
+#   LOG_STREAM    1 to stream app logs to stdout (default: 1)
+#
+# Usage:
+#   ./scripts/sim-run
+#   SIM_NAME="iPhone 14" ./scripts/sim-run
+#   LOG_STREAM=0 ./scripts/sim-run   # suppress log output
+# =============================================================================
+
+set -euo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd -P )"
+PROJECT_DIR="$DIR/.."
+
+SIM_NAME="${SIM_NAME:-iPhone 16}"
+BUNDLE_ID="${BUNDLE_ID:-com.rjsheperd.MobileTest}"
+NREPL_PORT="${NREPL_PORT:-23456}"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+LOG_STREAM="${LOG_STREAM:-1}"
+
+XCODE_DEVELOPER_DIR="${XCODE_DEVELOPER_DIR:-$(xcode-select -p 2>/dev/null)}"
+XCODEBUILD="$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild"
+XCODE_PROJECT="$PROJECT_DIR/xcode/MobileTest/MobileTest.xcodeproj"
+XCODE_SCHEME="MobileTest"
+DERIVED_DATA="$PROJECT_DIR/build/DerivedData-sim"
+
+# =============================================================================
+# Step 1: Find the simulator .app bundle
+# =============================================================================
+
+echo "=== Finding simulator app bundle ==="
+
+export DEVELOPER_DIR="$XCODE_DEVELOPER_DIR"
+
+BUILT_PRODUCTS_DIR=$("$XCODEBUILD" \
+    -project            "$XCODE_PROJECT" \
+    -scheme             "$XCODE_SCHEME" \
+    -configuration      "$CONFIGURATION" \
+    -sdk                iphonesimulator \
+    -destination        "platform=iOS Simulator,name=$SIM_NAME" \
+    -derivedDataPath    "$DERIVED_DATA" \
+    -showBuildSettings 2>/dev/null \
+    | grep '^\s*BUILT_PRODUCTS_DIR' \
+    | head -1 \
+    | awk -F' = ' '{print $2}' \
+    | xargs)
+
+APP_PATH=""
+if [ -n "$BUILT_PRODUCTS_DIR" ]; then
+    # -d prevents ls from listing the app bundle's contents instead of its path.
+    APP_PATH=$(ls -d "$BUILT_PRODUCTS_DIR"/*.app 2>/dev/null | head -1 || true)
+fi
+
+# Fallback: search dedicated sim DerivedData, then global DerivedData
+if [ -z "$APP_PATH" ]; then
+    APP_PATH=$(find "$DERIVED_DATA" -name "MobileTest.app" 2>/dev/null | sort -r | head -1 || true)
+fi
+if [ -z "$APP_PATH" ]; then
+    APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "MobileTest.app" \
+        -path "*/iphonesimulator*" 2>/dev/null | sort -r | head -1 || true)
+fi
+
+if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+    echo "ERROR: MobileTest.app not found for simulator."
+    echo "  Run ./scripts/build-demo-app-sim first."
+    exit 1
+fi
+
+echo "  App: $APP_PATH"
+
+# =============================================================================
+# Step 2: Boot simulator
+# =============================================================================
+
+echo ""
+echo "=== Booting simulator: $SIM_NAME ==="
+
+# Get the simulator UDID
+SIM_UDID=$(xcrun simctl list devices available 2>/dev/null \
+    | grep "$SIM_NAME" \
+    | grep -oE '[A-F0-9-]{36}' \
+    | head -1)
+
+if [ -z "$SIM_UDID" ]; then
+    echo "ERROR: Simulator '$SIM_NAME' not found."
+    echo "  Available simulators:"
+    xcrun simctl list devices available 2>/dev/null | grep "iPhone" | sed 's/^/    /'
+    exit 1
+fi
+
+echo "  UDID: $SIM_UDID"
+
+SIM_STATE=$(xcrun simctl list devices 2>/dev/null \
+    | grep "$SIM_UDID" \
+    | grep -oE "Booted|Shutdown" | head -1 || echo "Shutdown")
+
+if [ "$SIM_STATE" = "Booted" ]; then
+    echo "  Already booted."
+else
+    echo "  Booting..."
+    xcrun simctl boot "$SIM_UDID"
+    # Open Simulator.app so the window appears (optional but useful)
+    open -a Simulator 2>/dev/null || true
+    echo "  Booted."
+fi
+
+# =============================================================================
+# Step 3: Install app
+# =============================================================================
+
+echo ""
+echo "=== Installing app ==="
+xcrun simctl install "$SIM_UDID" "$APP_PATH"
+echo "  Installed: $BUNDLE_ID"
+
+# =============================================================================
+# Step 4: Stream logs in background (optional)
+# =============================================================================
+
+if [ "$LOG_STREAM" = "1" ]; then
+    echo ""
+    echo "=== Starting log stream (process: MobileTest) ==="
+    xcrun simctl spawn "$SIM_UDID" log stream \
+        --predicate 'process == "MobileTest"' \
+        --style compact &
+    LOG_PID=$!
+    echo "  Log PID: $LOG_PID"
+fi
+
+# =============================================================================
+# Step 5: Launch app
+# =============================================================================
+
+echo ""
+echo "=== Launching $BUNDLE_ID ==="
+xcrun simctl launch "$SIM_UDID" "$BUNDLE_ID"
+echo "  Launched."
+
+# =============================================================================
+# Step 6: Wait for nREPL
+# =============================================================================
+
+echo ""
+echo "=== Waiting for nREPL on localhost:$NREPL_PORT ==="
+WAIT_SECS=60
+for i in $(seq 1 $WAIT_SECS); do
+    if nc -z localhost "$NREPL_PORT" 2>/dev/null; then
+        echo "  nREPL ready after ${i}s"
+        break
+    fi
+    if [ "$i" -eq "$WAIT_SECS" ]; then
+        echo "ERROR: nREPL did not open on localhost:$NREPL_PORT after ${WAIT_SECS}s"
+        echo "  Check the simulator logs above for startup errors."
+        exit 1
+    fi
+    printf "  waiting... %ds\r" "$i"
+    sleep 1
+done
+
+echo ""
+echo "================================================================"
+echo "  Simulator nREPL ready"
+echo "================================================================"
+echo ""
+echo "  Connect:"
+echo "    clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}' \\"
+echo "        -M -m nrepl.cmdline --connect --host localhost --port $NREPL_PORT"
+echo ""
+echo "  Run tests:"
+echo "    NREPL_HOST=localhost NREPL_PORT=$NREPL_PORT tests/run_tests"
+echo ""
+echo "  Set simulated GPS (for location tests):"
+echo "    xcrun simctl location $SIM_UDID set 37.3318,-122.0312"
+echo ""

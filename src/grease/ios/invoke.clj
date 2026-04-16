@@ -9,15 +9,25 @@
   - [[grease.ios.objc/msg-send]] — the actual bridge (mockable in tests)
   - [[grease.ios.types]]         — coerce-in / coerce-out / encoding-for
   - [[grease.ios.registry]]      — method-spec / class-spec
+  - [[grease.ios.structs]]       — struct-return detection + pack/unpack
+
+  Struct returns (e.g. CGPoint, CLLocationCoordinate2D) use libffi's struct
+  return support via [[ffi/call-ptr]] with a [[dt-struct/define-datatype!]]
+  type.  This handles both HFA (≤ 16 bytes, returned in float registers) and
+  large structs (> 16 bytes, returned via hidden x8 pointer on arm64).
 
   Usage:
     (invoke/dispatch! receiver \"play\" method-spec [])
     (invoke/dispatch-class! \"NSMutableArray\" \"array\" method-spec [])"
-  (:require [com.phronemophobic.grease :as grease]
+  (:require [com.phronemophobic.clj-libffi :as ffi]
+            [com.phronemophobic.grease :as grease]
             [grease.ios.foundation :as foundation]
             [grease.ios.objc :as objc]
             [grease.ios.patterns :as patterns]
-            [grease.ios.types :as types]))
+            [grease.ios.structs :as structs]
+            [grease.ios.types :as types]
+            [tech.v3.datatype.ffi :as dt-ffi]
+            [tech.v3.datatype.struct :as dt-struct]))
 
 ;; =============================================================================
 ;; Encoding parsing
@@ -60,6 +70,66 @@
   [encoding]
   {:ret       (ret-kw encoding)
    :arg-types (arg-kws encoding)})
+
+;; =============================================================================
+;; Struct return support (Phase 10.2.4)
+;; =============================================================================
+
+(def ^:private prim->dtype
+  "Maps structs.edn primitive type strings to tech.v3.datatype dtype keywords."
+  {"double" :float64 "float" :float32
+   "int64"  :int64   "uint64" :uint64
+   "int32"  :int32   "uint32" :uint32
+   "int16"  :int16   "uint16" :uint16
+   "int8"   :int8    "uint8"  :uint8})
+
+(defn- ensure-ffi-struct!
+  "Registers struct-name in the dt-struct type registry so that libffi can
+  use it as a CIF return type.  Nested struct fields are registered
+  recursively.  Idempotent — safe to call every dispatch."
+  [struct-name]
+  (when-not (dt-struct/struct-datatype? (keyword struct-name))
+    (let [spec (structs/struct-for struct-name)]
+      (doseq [{:keys [type]} (:fields spec)]
+        (when (and (not (get prim->dtype type)) (structs/known-struct? type))
+          (ensure-ffi-struct! type)))
+      (dt-struct/define-datatype!
+       (keyword struct-name)
+       (mapv (fn [{:keys [name type]}]
+               {:name     (keyword name)
+                :datatype (or (get prim->dtype type) (keyword type))})
+             (:fields spec))))))
+
+(def ^:private msg-send-fptr
+  "Lazy reference to objc_msgSend function pointer.
+  Resolved once at first struct-return call."
+  (delay (ffi/dlsym ffi/RTLD_DEFAULT (dt-ffi/string->c "objc_msgSend"))))
+
+(defn- dt-struct->clj
+  "Recursively converts a dt-struct instance to a plain Clojure keyword map.
+  Nested struct fields become nested maps."
+  [struct-name dt-inst]
+  (let [spec (structs/struct-for struct-name)]
+    (into {}
+          (map (fn [{:keys [name type]}]
+                 (let [kw  (keyword name)
+                       val (get dt-inst kw)]
+                   [kw (if (structs/known-struct? type)
+                         (dt-struct->clj type val)
+                         val)]))
+               (:fields spec)))))
+
+(defn- msg-send-stret!
+  "Calls objc_msgSend with a struct return type via libffi struct support.
+  Works for both HFA (≤ 16 bytes) and large structs (> 16 bytes) on arm64.
+  typed-args is a flat seq of alternating type-kw/value pairs."
+  [receiver sel-str struct-name typed-args]
+  (ensure-ffi-struct! struct-name)
+  (let [sel    (grease/register-objc-sel sel-str)
+        result (apply ffi/call-ptr @msg-send-fptr (keyword struct-name)
+                      :pointer receiver :pointer sel
+                      typed-args)]
+    (dt-struct->clj struct-name result)))
 
 ;; =============================================================================
 ;; Auto-coercion for id-typed arguments
@@ -110,9 +180,13 @@
                                                (types/coerce-in (:type spec "id") val)))]
                                [kw coerced]))
                            arg-specs arg-types arg-vals)
-        raw-result (apply objc/msg-send ret receiver sel-str typed-args)
         ret-type   (:return method-spec "id")]
-    (types/coerce-out ret-type raw-result)))
+    (if (structs/known-struct? ret-type)
+      ;; Struct return: use libffi struct-return path (handles HFA + stret on arm64)
+      (msg-send-stret! receiver sel-str ret-type typed-args)
+      ;; Normal return: use objc/msg-send with coerce-out
+      (let [raw-result (apply objc/msg-send ret receiver sel-str typed-args)]
+        (types/coerce-out ret-type raw-result)))))
 
 (defn dispatch-class!
   "Convenience wrapper that resolves class-name to a class pointer before
