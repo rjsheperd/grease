@@ -3,10 +3,13 @@
 ;; @last-location holds the latest CLLocation pointer.
 ;; start! accepts an on-location-fn callback (fn [loc]) to avoid coupling this
 ;; namespace to demo_app.clj's UI atoms.
+;;
+;; Struct returns (CLLocationCoordinate2D from -coordinate, double from
+;; -horizontalAccuracy) are handled by grease.ios.invoke/dispatch! via
+;; ffi/call-ptr — no C shims required.
 
 (ns demo-app.location
-  (:require [com.phronemophobic.clj-libffi :as ffi]
-            [grease.ios.api                :as ios]
+  (:require [grease.ios.api                :as ios]
             [grease.ios.foundation         :as f]
             [grease.ios.objc               :as objc-rt]
             [grease.ios.repl               :refer [on-main]]))
@@ -18,23 +21,29 @@
 (defonce ^:private mgr-state (atom nil))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
-;; Scalar accessors (CLLocationCoordinate2D struct-return bypass)
+;; CLLocation accessors — struct-return via engine dispatch
 ;; ─────────────────────────────────────────────────────────────────────────────
+
+(defn coordinate
+  "Returns {:latitude double :longitude double} from a CLLocation pointer.
+  Dispatched via ffi/call-ptr for correct ARM64 HFA struct return (d0/d1)."
+  [loc]
+  (ios/call* loc "CLLocation" "coordinate"))
 
 (defn latitude
   "Returns the latitude of a CLLocation pointer as a double."
   [loc]
-  (ffi/call "grease_location_latitude" :float64 :pointer loc))
+  (:latitude (coordinate loc)))
 
 (defn longitude
   "Returns the longitude of a CLLocation pointer as a double."
   [loc]
-  (ffi/call "grease_location_longitude" :float64 :pointer loc))
+  (:longitude (coordinate loc)))
 
 (defn accuracy
   "Returns the horizontal accuracy of a CLLocation pointer in metres."
   [loc]
-  (ffi/call "grease_location_accuracy" :float64 :pointer loc))
+  (objc-rt/msg-send :float64 loc "horizontalAccuracy"))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; Lifecycle

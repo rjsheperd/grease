@@ -1,12 +1,16 @@
 ;; dev/demo_app/map.clj — MKMapView helpers for the demo app.
 ;;
-;; All map operations use scalar-arg C shims to bypass struct FFI limitations.
-;; setRegion:animated: takes MKCoordinateRegion by value (32 bytes) — handled
-;; by grease_set_map_region in Bridge.m.
+;; setRegion:animated: passes MKCoordinateRegion by value (32 bytes, 4 doubles).
+;; grease.ios.invoke/dispatch! handles this via ffi/call-ptr with a composite
+;; ffi_type — libffi generates correct ARM64 HFA calling code. No C shim needed.
+;;
+;; Screen size uses grease_get_frame_w/h on the parent view (avoids CGRect
+;; struct return from UIScreen.bounds and respects tab bar layout).
 
 (ns demo-app.map
   (:require [com.phronemophobic.clj-libffi :as ffi]
             [com.phronemophobic.grease     :as grease]
+            [grease.ios.api               :as ios]
             [grease.ios.objc               :as objc-rt]))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
@@ -24,19 +28,18 @@
   (ffi/call "grease_screen_height" :float64))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
-;; Map region (struct-arg bypass)
+;; Map region — libffi composite type dispatch (no C shim)
 ;; ─────────────────────────────────────────────────────────────────────────────
 
 (defn set-region!
   "Centers map-view on [lat lng] with the given degree span (animated if animated?).
-  Uses grease_set_map_region C shim to bypass the MKCoordinateRegion struct arg.
+  Passes MKCoordinateRegion as a struct via ffi/call-ptr — no C shim needed.
   Must be called on the main thread."
   [map-view lat lng lat-delta lng-delta animated?]
-  (ffi/call "grease_set_map_region" :void
-            :pointer map-view
-            :float64 lat       :float64 lng
-            :float64 lat-delta :float64 lng-delta
-            :int8    (if animated? 1 0)))
+  (ios/call* map-view "MKMapView" "setRegion:animated:"
+             {:center {:latitude lat :longitude lng}
+              :span   {:latitude-delta lat-delta :longitude-delta lng-delta}}
+             animated?))
 
 ;; ─────────────────────────────────────────────────────────────────────────────
 ;; Default region constants
