@@ -671,39 +671,31 @@ auto-converts strings → NSString, vectors → NSArray, maps → NSDictionary, 
 NSNumber.  The grease engine currently requires callers to pre-box values manually.
 This phase adds the same convenience without changing the encoding-driven wire layer.
 
-** TODO 8.1 ~grease.ios.coerce~ — Clojure→ObjC value bridge
+** DONE 8.1 ~grease.ios.coerce~ — Clojure→ObjC value bridge
 
-New namespace sitting between the user and ~grease.ios.types~.
+~src/grease/ios/coerce.clj~ dispatches on runtime Clojure type:
 
-#+begin_src clojure
-;; grease/ios/coerce.clj — public API
-(defn ->ns-object [v])
-;; Dispatch on Clojure type:
-;;   String     -> NSString via stringWithUTF8String:
-;;   IPersistentVector -> NSArray via NSMutableArray + addObject:
-;;   IPersistentMap    -> NSDictionary via NSMutableDictionary + setObject:forKey:
-;;   IPersistentSet    -> NSSet via NSMutableSet + addObject:
-;;   Long/Integer -> NSNumber via numberWithLongLong:
-;;   Double/Float -> NSNumber via numberWithDouble:
-;;   nil          -> null-ptr (passthrough)
-;;   other        -> passthrough (assume already a pointer)
+- ~String~         → NSString via ~foundation/->nsstring~
+- ~Long/Integer~   → NSNumber via ~foundation/->nsnumber-long~
+- ~Double/Float~   → NSNumber via ~foundation/->nsnumber-double~
+- ~IPersistentMap~ → NSDictionary (keys coerced to NSString, values recursive)
+- ~Sequential~     → NSArray (elements recursively coerced)
+- ~nil~            → null-ptr via ~types/coerce-in "id" nil~
+- ~other~          → passthrough (assumed raw pointer)
 
-(defn from-ns-object [class-name ptr])
-;; Reverse:
-;;   "NSString"  -> (.UTF8String ptr) -> Clojure string
-;;   "NSArray"   -> walk count+objectAtIndex: -> Clojure vector
-;;   "NSDictionary" -> walk allKeys+objectForKey: -> Clojure map
-;;   "NSNumber"  -> longLongValue or doubleValue
-;;   other       -> ptr passthrough
-#+end_src
+~from-ns-object~ delegates to ~types/coerce-out~.
 
-~->ns-object~ is modeled on objcjure's ~arg->dtype~ + deref coercion handlers
-(~objcjure.clj~ lines 111–126 and 345–436).
+Gates passing (~test/grease/ios/coerce_test.clj~, 12 tests / 16 assertions):
+- String/Long/Double/Vector/Map dispatch verified via real ObjC calls on macOS
+- nil test guarded (GraalVM-only ~grease_null_ptr~ not on macOS JVM)
+- String + Long round-trips verified
+- Boolean, NSInteger, unknown passthrough verified
 
-Gate: ~test/grease/ios/coerce_test.clj~
-- Round-trip each Clojure type: ~(from-ns-object t (->ns-object v)) => v~
-- nil passthrough; unknown pointer passthrough
-- All tests run JVM-only via mock bridge (no device needed)
+Also created ~test/grease/ios_host.clj~ — JVM stub for ~grease.ios-host~
+(the real namespace is a synthetic SCI namespace in the GraalVM native image;
+the stub provides ~read-resource~ via ~clojure.java.io/resource~ so all JVM
+tests that require ~grease.ios.types~, ~grease.ios.naming~, and
+~grease.ios.spec~ can load.)
 
 ** TODO 8.2 Wire auto-coercion into ~grease.ios.invoke/dispatch!~
 
@@ -727,6 +719,34 @@ Before: ~(ios/call label :set-text (f/->nsstring "hello"))~
 After:  ~(ios/call label :set-text "hello")~
 
 Gate: existing invoke tests unchanged; new test verifies string arg auto-boxed.
+
+*** TODO 8.2.1 Add ~pointer?~ predicate to ~grease.ios.types~
+
+Add a ~(defn pointer? [v])~ that returns true when ~v~ is a native ffi.Pointer
+or a raw ObjC class/instance map. This is needed so dispatch! can distinguish
+"already a pointer" from "Clojure value that needs boxing".
+
+#+begin_src clojure
+;; In types.clj
+(defn pointer?
+  "Returns true if v is an ObjC pointer (tech.v3.datatype.ffi.Pointer)
+  or a structural pointer map from the mock bridge."
+  [v]
+  (or (instance? tech.v3.datatype.ffi.Pointer v)
+      (and (map? v) (contains? v :class-name))   ; mock sentinel
+      (nil? v)))                                  ; nil is a valid null pointer
+#+end_src
+
+*** TODO 8.2.2 Extend ~invoke/dispatch!~ with auto-coerce branch
+
+Edit the arg-coercion ~let~ binding in ~dispatch!~ and ~dispatch-class!~ to call
+~coerce/->ns-object~ when the arg type is ~"id"~ and the value isn't already a pointer.
+Add ~[grease.ios.coerce :as coerce]~ to invoke.clj requires.
+
+*** TODO 8.2.3 Update ~invoke_test.clj~ with auto-coerce coverage
+
+Add one new test confirming that ~(api/call label :set-text "hello")~ (passing a plain
+string) reaches the device layer without an explicit ~->nsstring~ conversion.
 
 * Phase 9 — Generic Block Factory (objcjure-inspired)
 
