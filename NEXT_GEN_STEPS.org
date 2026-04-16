@@ -413,6 +413,21 @@ On-device validation (the full GPS wait) deferred to Phase 2 real-device work.
 
 Gate: 112 total tests, 429 assertions, 0 failures.
 
+** IN-PROGRESS 2.3 On-device CLLocationManager via engine API
+
+Validate the full delegate pipeline using ~grease.ios.api~ on real hardware.
+Uses ~tests/test_engine_corelocation.clj~.
+
+Steps 1-4 PASS (engine API, instantiation, auth request, delegate+start).
+Steps 5-6 require outdoor GPS reception — run outdoors or with a GPS simulator.
+Note: ~Thread/sleep~ is not available in SCI; use ~(deref (promise) 500 nil)~ instead.
+
+#+begin_src bash
+clj -M tests/test_engine_corelocation.clj
+#+end_src
+
+Gate: all steps pass; ~clm-loc~ atom contains a non-nil value after GPS fix.
+
 * Phase 3 — AVFoundation.edn
 
 Oracle: ~src/grease/ios/camera.clj~
@@ -432,28 +447,27 @@ Key methods (camera path):
 - ~AVCaptureSession startRunning~ / ~stopRunning~ — main-thread
 - ~AVCaptureSession isRunning~ — ~"B@:"~, returns BOOL
 
-** TODO 3.2 AVFoundation REPL test
+** DONE 3.2 AVFoundation on-device REPL test
 
-#+begin_src clojure
-(def frame-count (atom 0))
+Uses ~tests/test_engine_avfoundation.clj~.
 
-(let [session (ios/make :capture-session)
-      camera  (ios/call :capture-device :default-device-with-media-type "vide")
-      input   (ios/call :capture-device-input :device-input-with-device:error: camera nil)
-      output  (ios/make :capture-video-data-output)
-      d       {:on-capture-output:did-output-sample-buffer:from-connection:
-               (fn [_self _cmd _out buf _conn]
-                 (swap! frame-count inc))}]
-  (ios/call session :begin-configuration)
-  (ios/call session :add-input input)
-  (ios/call session :add-output output)
-  (ios/call output :set-sample-buffer-delegate:queue: d (grease.ios.foundation/main-queue))
-  (ios/call session :commit-configuration)
-  (ios/call session :start-running)
-  (deref (promise) 3000 nil)
-  @frame-count)
-;; => > 0
+Steps:
+1. ~api/make "AVCaptureSession" "init"~ — create session
+2. ~api/call :capture-device "defaultDeviceWithMediaType:" "vide"~ (class method, needs dispatch-class-raw!)
+3. ~api/make "AVCaptureVideoDataOutput" "init"~ — create output
+4. Wire frame-count delegate via delegate pattern
+5. Start session, wait 3s, verify frame-count > 0
+
+Key blockers to investigate:
+- ~defaultDeviceWithMediaType:~ is a class method returning AVCaptureDevice — needs ~dispatch-class-raw!~
+- ~deviceInputWithDevice:error:~ takes NSError** — may need special handling
+- Camera delegate uses ~setSampleBufferDelegate:queue:~ which needs a dispatch_queue_t pointer
+
+#+begin_src bash
+clj -M tests/test_engine_avfoundation.clj
 #+end_src
+
+Gate: frame-count > 0 after 3s (requires camera permission grant).
 
 * Phase 4 — UIKit.edn
 

@@ -98,6 +98,21 @@
         ptr    (invoke/dispatch-class-raw! class-name selector method args)]
     (->ObjcObject class-name ptr)))
 
+(defn class-call
+  "Calls a class-level method that returns a coerced Clojure value (not an object pointer).
+  Use this for class methods like ~authorizationStatusForMediaType:~ that return
+  primitives (integers, booleans, doubles).  For factory methods that return ObjC
+  object pointers, use [[make]] instead.
+
+  class-name  — ObjC class name string e.g. ~\"AVCaptureDevice\"~
+  selector    — method selector string e.g. ~\"authorizationStatusForMediaType:\"~
+  args        — Clojure values for any selector arguments
+
+  Returns the coerced Clojure value (long, boolean, double, etc.)."
+  [class-name selector & args]
+  (let [method (require-method class-name selector)]
+    (invoke/dispatch-class! class-name selector method args)))
+
 ;; =============================================================================
 ;; Instance dispatch
 ;; =============================================================================
