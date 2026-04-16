@@ -64,6 +64,24 @@ void *grease_class_method_names(void *cls);
 void *grease_null_ptr(void);
 void *grease_main_queue(void);
 
+// MapKit region shim — avoids MKCoordinateRegion struct arg via FFI.
+// Equivalent to [mapView setRegion:MKCoordinateRegionMake(...) animated:animated].
+// Must be called on the main thread.
+void   grease_set_map_region(void *mapView,
+                             double center_lat, double center_lng,
+                             double span_lat_delta, double span_lng_delta,
+                             int animated);
+
+// CLLocation scalar accessors — avoids CLLocationCoordinate2D struct return via FFI.
+// Prefer (ios/call loc :coordinate) once invoke struct-return is validated on device.
+double grease_location_latitude(void *location);
+double grease_location_longitude(void *location);
+double grease_location_accuracy(void *location);
+
+// UIScreen bounds accessors — avoids CGRect struct return via FFI.
+double grease_screen_width(void);
+double grease_screen_height(void);
+
 // UIKit frame / geometry shims — avoids CGRect struct return via FFI.
 // All functions must be called on the main thread.
 void   grease_set_frame(void *view, double x, double y, double w, double h);

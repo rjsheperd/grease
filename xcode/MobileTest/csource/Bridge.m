@@ -353,6 +353,64 @@ double grease_get_center_y(void *view) {
     return ((__bridge UIView *)view).center.y;
 }
 
+// =============================================================================
+// MapKit region shim
+//
+// setRegion:animated: takes an MKCoordinateRegion struct by value (32 bytes).
+// This scalar shim accepts the four component doubles directly, avoiding the
+// struct-arg FFI problem.  Must be called on the main thread.
+// =============================================================================
+
+#import <MapKit/MapKit.h>
+#import <CoreLocation/CoreLocation.h>
+
+void grease_set_map_region(void *mapView,
+                           double center_lat, double center_lng,
+                           double span_lat_delta, double span_lng_delta,
+                           int animated) {
+    MKMapView *mv = (__bridge MKMapView *)mapView;
+    MKCoordinateRegion r =
+        MKCoordinateRegionMake(
+            CLLocationCoordinate2DMake(center_lat, center_lng),
+            MKCoordinateSpanMake(span_lat_delta, span_lng_delta));
+    [mv setRegion:r animated:(BOOL)animated];
+}
+
+// =============================================================================
+// CLLocation scalar accessors
+//
+// CLLocation.coordinate returns CLLocationCoordinate2D — a struct.
+// These scalar shims decompose it into doubles until invoke/dispatch! struct
+// returns are validated on device (Phase 10.2.4 on-device test, Phase 3.4 review).
+// =============================================================================
+
+double grease_location_latitude(void *location) {
+    return ((__bridge CLLocation *)location).coordinate.latitude;
+}
+
+double grease_location_longitude(void *location) {
+    return ((__bridge CLLocation *)location).coordinate.longitude;
+}
+
+double grease_location_accuracy(void *location) {
+    return ((__bridge CLLocation *)location).horizontalAccuracy;
+}
+
+// =============================================================================
+// UIScreen bounds accessors
+//
+// UIScreen.mainScreen.bounds returns CGRect — a struct.
+// These scalar accessors let Clojure read the screen size without struct FFI.
+// =============================================================================
+
+double grease_screen_width(void) {
+    return [UIScreen mainScreen].bounds.size.width;
+}
+
+double grease_screen_height(void) {
+    return [UIScreen mainScreen].bounds.size.height;
+}
+
 void *grease_class_method_names(void *cls) {
     uint count = 0;
     Method *methods = class_copyMethodList((__bridge Class)cls, &count);

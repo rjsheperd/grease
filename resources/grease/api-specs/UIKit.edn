@@ -37,11 +37,17 @@
    :main-thread? true
    :init         []
    :methods
-   [{:selector "rootViewController"
-     :encoding "@@:"
-     :args     []
-     :return   "id"
-     :main-thread? true}]
+   [{:selector     "rootViewController"
+     :encoding     "@@:"
+     :args         []
+     :return       "id"
+     :main-thread? true}
+    {:selector     "setRootViewController:"
+     :encoding     "v@:@"
+     :args         [{:name "rootViewController" :type "id"}]
+     :return       "void"
+     :main-thread? true
+     :doc          "Replaces the root view controller; animates the transition"}]
    :properties []}
 
   {:name         "UIViewController"
@@ -49,11 +55,102 @@
    :main-thread? true
    :init         []
    :methods
-   [{:selector "view"
+   [{:selector     "view"
+     :encoding     "@@:"
+     :args         []
+     :return       "id"
+     :main-thread? true}
+    {:selector     "setTabBarItem:"
+     :encoding     "v@:@"
+     :args         [{:name "tabBarItem" :type "id"}]
+     :return       "void"
+     :main-thread? true
+     :doc          "Sets the tab bar item used to represent this view controller in a tab bar"}]
+   :properties []}
+
+  {:name         "UITabBarController"
+   :superclass   "UIViewController"
+   :main-thread? true
+   :init
+   [{:selector "new"
      :encoding "@@:"
-     :args     []
      :return   "id"
+     :args     []
+     :doc      "Creates a new UITabBarController"}]
+   :methods
+   [{:selector     "setViewControllers:animated:"
+     :encoding     "v@:@B"
+     :return       "void"
+     :args         [{:name "viewControllers" :type "NSArray"}
+                    {:name "animated"        :type "BOOL"}]
+     :main-thread? true
+     :doc          "Sets the root view controllers displayed by the tab bar"}
+    {:selector     "viewControllers"
+     :encoding     "@@:"
+     :return       "NSArray"
+     :args         []
+     :main-thread? true}
+    {:selector     "selectedIndex"
+     :encoding     "Q@:"
+     :return       "NSUInteger"
+     :args         []
+     :main-thread? true}
+    {:selector     "setSelectedIndex:"
+     :encoding     "v@:Q"
+     :return       "void"
+     :args         [{:name "selectedIndex" :type "NSUInteger"}]
      :main-thread? true}]
+   :properties []}
+
+  {:name         "UINavigationController"
+   :superclass   "UIViewController"
+   :main-thread? true
+   :init
+   [{:selector "initWithRootViewController:"
+     :encoding "@@:@"
+     :return   "id"
+     :args     [{:name "rootViewController" :type "id"}]
+     :doc      "Creates a UINavigationController with the given root view controller"}]
+   :methods
+   [{:selector     "topViewController"
+     :encoding     "@@:"
+     :return       "id"
+     :args         []
+     :main-thread? true}
+    {:selector     "setNavigationBarHidden:animated:"
+     :encoding     "v@:BB"
+     :return       "void"
+     :args         [{:name "hidden"   :type "BOOL"}
+                    {:name "animated" :type "BOOL"}]
+     :main-thread? true}]
+   :properties []}
+
+  {:name         "UITabBarItem"
+   :superclass   "NSObject"
+   :main-thread? true
+   :init
+   [{:selector "initWithTitle:image:tag:"
+     :encoding "@@:@@q"
+     :return   "id"
+     :args     [{:name "title" :type "NSString"}
+                {:name "image" :type "id"       :nullable true}
+                {:name "tag"   :type "NSInteger"}]
+     :doc      "Creates a tab bar item with a title, optional image, and tag"}
+    {:selector "initWithTabBarSystemItem:tag:"
+     :encoding "@@:qq"
+     :return   "id"
+     :args     [{:name "systemItem" :type "NSInteger"}
+                {:name "tag"        :type "NSInteger"}]
+     :doc      "Creates a tab bar item using a UITabBarSystemItem (0=more 1=favorites 2=featured 3=topRated 4=recents 5=contacts 6=history 7=bookmarks 8=search 9=downloads 10=mostRecent 11=mostViewed)"}]
+   :methods
+   [{:selector "title"
+     :encoding "@@:"
+     :return   "NSString"
+     :args     []}
+    {:selector "setTitle:"
+     :encoding "v@:@"
+     :return   "void"
+     :args     [{:name "title" :type "NSString"}]}]
    :properties []}
 
   {:name         "UIView"

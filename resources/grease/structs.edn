@@ -74,4 +74,18 @@
  {:name   "CMTimeMapping"
   :fields [{:name "source" :type "CMTimeRange" :offset 0}
            {:name "target" :type "CMTimeRange" :offset 48}]
-  :size   96}]
+  :size   96}
+
+ ;; MapKit — MKGeometry.h
+ ;; MKCoordinateSpan: two CLLocationDegrees (= double) fields
+ {:name   "MKCoordinateSpan"
+  :fields [{:name "latitude-delta"  :type "double" :offset 0}
+           {:name "longitude-delta" :type "double" :offset 8}]
+  :size   16}
+
+ ;; MKCoordinateRegion: CLLocationCoordinate2D center + MKCoordinateSpan span
+ ;; Total: 16 (CLLocationCoordinate2D) + 16 (MKCoordinateSpan) = 32 bytes
+ {:name   "MKCoordinateRegion"
+  :fields [{:name "center" :type "CLLocationCoordinate2D" :offset 0}
+           {:name "span"   :type "MKCoordinateSpan"       :offset 16}]
+  :size   32}]

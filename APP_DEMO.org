@@ -44,7 +44,7 @@ Goal: everything the later phases need is available as engine-callable API
 or direct FFI before we write a single line of UI code.  Full rebuild once
 here; zero rebuilds after.
 
-** TODO 0.1 Fix ~MapKit.edn~
+** DONE 0.1 Fix ~MapKit.edn~
 
 The auto-scraped ~resources/grease/api-specs/MapKit.edn~ pulled Swift
 documentation and is not usable.  Replace with a hand-written ObjC spec
@@ -64,7 +64,7 @@ it ~:unsupported true~ in the EDN; use the C shim from 0.3 instead.
 
 Gate: ~(registry/class-spec "MKMapView")~ returns a non-nil map.
 
-** TODO 0.2 Add MapKit structs to ~structs.edn~
+** DONE 0.2 Add MapKit structs to ~structs.edn~
 
 ~MKCoordinateSpan~ and ~MKCoordinateRegion~ are needed for the C shim in 0.3
 and for the scraper normalizer if MapKit methods are ever re-scraped.
@@ -89,7 +89,7 @@ Add to ~resources/grease/structs.edn~:
 
 Gate: ~structs_test.clj~ still passes with the new entries; sizes validated.
 
-** TODO 0.3 Add C shim ~grease_set_map_region~
+** DONE 0.3 Add C shim ~grease_set_map_region~
 
 ~setRegion:animated:~ takes an ~MKCoordinateRegion~ struct by value (32 bytes
 = 2× HFA of 16 bytes each).  Cannot be called via a generic ~msg-send~.
@@ -133,7 +133,7 @@ Expose in Clojure as:
 
 Gate: ~ffi/find-library "grease_set_map_region"~ resolves (app starts).
 
-** TODO 0.4 Expand ~UIKit.edn~ for tab bar and navigation
+** DONE 0.4 Expand ~UIKit.edn~ for tab bar and navigation
 
 Add missing classes to the hand-written ~resources/grease/api-specs/UIKit.edn~:
 
