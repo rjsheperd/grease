@@ -14,11 +14,12 @@
   - [[tech.v3.datatype.struct]]           — dt-struct type registry and inplace-new-struct
   - [[java.nio.ByteBuffer/allocateDirect]]— off-heap buffer for struct-arg packing
 
-  Struct arguments and struct returns both use [[ffi/call-ptr]] with
-  composite [[dt-struct/define-datatype!]] types.  libffi generates correct
-  ARM64 calling code — HFAs (≤ 4 homogeneous float/double fields) are passed
-  and returned in the d0–d3 floating-point registers; larger structs use the
-  hidden x8 stret pointer convention.  No C shims are required.
+  Struct ARGUMENTS use [[ffi/call-ptr]] with composite [[dt-struct/define-datatype!]]
+  types so libffi generates correct ARM64 HFA calling code (d0–d3 registers).
+  Struct RETURN types are NOT supported via [[ffi/call-ptr]] — libffi incorrectly
+  prepends a hidden stret pointer for composite returns on ARM64, shifting the
+  receiver/selector and crashing [[objc_msgSend]].  Methods with struct return
+  types must use C shims.
 
   Usage:
     (invoke/dispatch! receiver \"play\" method-spec [])
@@ -109,20 +110,6 @@
   Resolved once on first struct dispatch."
   (delay (ffi/dlsym ffi/RTLD_DEFAULT (dt-ffi/string->c "objc_msgSend"))))
 
-(defn- dt-struct->clj
-  "Recursively converts a dt-struct instance to a plain Clojure keyword map.
-  Nested struct fields become nested maps."
-  [struct-name dt-inst]
-  (let [spec (structs/struct-for struct-name)]
-    (into {}
-          (map (fn [{:keys [name type]}]
-                 (let [kw  (keyword name)
-                       val (get dt-inst kw)]
-                   [kw (if (structs/known-struct? type)
-                         (dt-struct->clj type val)
-                         val)]))
-               (:fields spec)))))
-
 (defn- clj->dt-struct
   "Converts a Clojure keyword map to a native-heap dt-struct instance for use
   as a struct-valued argument in [[ffi/call-ptr]].
@@ -184,20 +171,28 @@
   Coercion is driven by the method spec `:args` and `:return` fields.
   The `:encoding` field drives the wire types.
 
-  When any argument or the return type is a known struct, the call is routed
-  through [[ffi/call-ptr]] with composite ffi_type descriptors so that libffi
-  generates correct ARM64 calling code (HFA registers or stret pointer).
-  No C shims are needed for struct-boundary methods."
+  When any argument is a known struct, the call is routed through
+  [[ffi/call-ptr]] with composite ffi_type descriptors so that libffi
+  generates correct ARM64 calling code (HFA registers for struct-by-value
+  arguments).
+
+  LIMITATION: struct RETURN types are NOT dispatched through [[ffi/call-ptr]].
+  ARM64 HFA structs (like CLLocationCoordinate2D, 2 doubles) are returned in
+  d0-d1, but libffi incorrectly prepends a hidden stret pointer as x0 when a
+  composite return type is used, shifting receiver/selector and crashing
+  objc_msgSend.  Methods with struct return types require C shims or a separate
+  mechanism.  Use the fast path for struct-return methods — the caller is
+  responsible for interpreting the result."
   [receiver sel-str method-spec arg-vals]
   (let [{:keys [ret arg-types]} (parse-encoding (:encoding method-spec))
         arg-specs    (:args method-spec)
         ret-type     (:return method-spec "id")
-        struct-ret?  (structs/known-struct? ret-type)
         struct-arg?  (some #(structs/known-struct? (:type % "id")) arg-specs)]
-    (if (or struct-ret? struct-arg?)
-      ;; ── Struct path ──────────────────────────────────────────────────────────
-      ;; At least one struct involved.  Use ffi/call-ptr so libffi can apply the
-      ;; correct ARM64 calling convention (HFA d-registers / stret x8 pointer).
+    (if struct-arg?
+      ;; ── Struct-arg path ──────────────────────────────────────────────────────
+      ;; At least one argument is a struct.  Use ffi/call-ptr so libffi applies
+      ;; the correct ARM64 calling convention (HFA d-registers for composite args).
+      ;; Return type is NOT a struct here (struct-return methods must use C shims).
       (let [ffi-typed-args
             (mapcat (fn [spec arg-kw val]
                       (let [type-name (:type spec "id")]
@@ -215,16 +210,11 @@
                           :else
                           [arg-kw (types/coerce-in type-name val)])))
                     arg-specs arg-types arg-vals)
-            ffi-ret  (if struct-ret?
-                       (do (ensure-ffi-struct! ret-type) (keyword ret-type))
-                       ret)
-            sel      (grease/register-objc-sel sel-str)
-            result   (apply ffi/call-ptr @msg-send-fptr ffi-ret
-                            :pointer receiver :pointer sel
-                            ffi-typed-args)]
-        (if struct-ret?
-          (dt-struct->clj ret-type result)
-          (types/coerce-out ret-type result)))
+            sel    (grease/register-objc-sel sel-str)
+            result (apply ffi/call-ptr @msg-send-fptr ret
+                          :pointer receiver :pointer sel
+                          ffi-typed-args)]
+        (types/coerce-out ret-type result))
 
       ;; ── Fast path ────────────────────────────────────────────────────────────
       ;; No structs anywhere — use objc/msg-send directly (cheaper CIF).

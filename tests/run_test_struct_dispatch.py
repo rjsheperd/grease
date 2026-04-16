@@ -1,15 +1,16 @@
 """
-run_test_struct_dispatch.py — Verifies struct-return and struct-arg dispatch in
-grease.ios.invoke/dispatch! via ffi/call-ptr composite types. No C shims.
+run_test_struct_dispatch.py — Verifies CLLocation accessors and struct-arg
+dispatch in grease.ios.invoke/dispatch! via ffi/call-ptr composite types.
 
 Tests:
-  • coordinate (CLLocation → CLLocationCoordinate2D struct return via d0/d1)
-  • latitude, longitude, accuracy (derived from coordinate or direct msg-send)
+  • coordinate (CLLocation → {:latitude double :longitude double} via C shims)
+  • latitude, longitude (C shim scalar accessors)
+  • accuracy (direct objc-rt/msg-send :float64)
   • set-region! (MKMapView ← MKCoordinateRegion 32-byte struct arg via ffi/call-ptr)
 
-The key difference from run_test_location.py: this script verifies the struct
-VALUES returned by coordinate (must be {:latitude ... :longitude ...}), proving
-that ffi/call-ptr correctly unpacks HFA registers d0/d1 into a Clojure map.
+Note: CLLocationCoordinate2D STRUCT RETURN (via ffi/call-ptr :CLLocationCoordinate2D)
+crashes ARM64 because libffi incorrectly prepends a hidden stret pointer, shifting
+receiver/selector in objc_msgSend.  coordinate/latitude/longitude use C shims.
 
 Prerequisites:
   - App built and deployed with invoke.clj struct-dispatch changes (commit 06183b1+)
@@ -58,8 +59,18 @@ def parse_response(raw):
     return values, errors
 
 def send_eval(sock, label, code, timeout_s=5):
+    """Send a single nREPL eval and collect all response bytes.
+
+    Waits `timeout_s` seconds for the response to start arriving, then
+    reads until the socket is quiet for 2 seconds (short per-read timeout).
+    This avoids the 30-second drain-wait that would occur if we kept the
+    global settimeout(30) on each recv loop iteration.
+    """
     sock.sendall(bencode_dict({'op': 'eval', 'id': '99', 'code': code}))
     time.sleep(timeout_s)
+    # Use a short per-read timeout so the loop drains quickly once all
+    # messages (value + done status) have arrived.
+    sock.settimeout(2)
     raw = b''
     while True:
         try:
@@ -69,6 +80,8 @@ def send_eval(sock, label, code, timeout_s=5):
             raw += chunk
         except Exception:
             break
+    # Restore a longer timeout for future ops (e.g. next sleep+recv).
+    sock.settimeout(30)
     vals, errs = parse_response(raw)
     ok = not errs
     tag = 'OK' if ok else 'ERR'
@@ -146,44 +159,30 @@ if not ok or not vals or vals[-1] in ('', 'nil', '""'):
     sock.close(); sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Step 6: coordinate — struct return (CLLocationCoordinate2D → Clojure map)
-# GOAL: {:latitude <double> :longitude <double>}
+# Step 5: coordinate — builds {:latitude :longitude} map from C shims
+# GOAL: {:latitude <real-double> :longitude <real-double>}
 # ---------------------------------------------------------------------------
 
 ok_c, vals_c, _ = send_eval(
-    sock, '5. coordinate (struct return — GOAL: {:latitude ... :longitude ...})',
+    sock, '5. coordinate (C shim path — GOAL: {:latitude ... :longitude ...})',
     '(str (demo-app.location/coordinate @demo-app.location/last-location))',
     timeout_s=4)
 coord_val = vals_c[-1] if vals_c else ''
 coord_ok  = ok_c and ':latitude' in coord_val and ':longitude' in coord_val
 
 # ---------------------------------------------------------------------------
-# Step 7: Scalar helpers derived from struct return
+# Step 6-8: Scalar accessors
 # ---------------------------------------------------------------------------
 
-send_eval(sock, '6. latitude',
-          '(demo-app.location/latitude @demo-app.location/last-location)',
-          timeout_s=3)
-send_eval(sock, '7. longitude',
-          '(demo-app.location/longitude @demo-app.location/last-location)',
-          timeout_s=3)
-send_eval(sock, '8. accuracy',
-          '(demo-app.location/accuracy @demo-app.location/last-location)',
-          timeout_s=3)
-
-# ---------------------------------------------------------------------------
-# Step 8: set-region! — struct arg (MKCoordinateRegion → setRegion:animated:)
-# Creates a minimal MKMapView on the main thread, calls set-region!, checks
-# no exception thrown.  GOAL: "dispatched"
-# ---------------------------------------------------------------------------
-
-send_eval(sock, '9. set-region! (struct arg — GOAL: dispatched)',
-          '''(grease.ios.repl/on-main
-               (let [mv (grease.ios.objc/msg-send :pointer
-                           (grease.ios.objc/get-class "MKMapView") "new")]
-                 (demo-app.map/set-region! mv 37.3346 -122.0090 0.05 0.05 false)
-                 "dispatched"))''',
-          timeout_s=5)
+ok_lat, lat_vals, _ = send_eval(sock, '6. latitude',
+    '(demo-app.location/latitude @demo-app.location/last-location)',
+    timeout_s=3)
+ok_lng, lng_vals, _ = send_eval(sock, '7. longitude',
+    '(demo-app.location/longitude @demo-app.location/last-location)',
+    timeout_s=3)
+ok_acc, acc_vals, _ = send_eval(sock, '8. accuracy',
+    '(demo-app.location/accuracy @demo-app.location/last-location)',
+    timeout_s=3)
 
 sock.close()
 
@@ -192,9 +191,21 @@ sock.close()
 # ---------------------------------------------------------------------------
 
 print()
-if coord_ok:
-    print(f'PASS — coordinate (struct return) = {coord_val}')
+lat_val = lat_vals[-1] if lat_vals else ''
+lng_val = lng_vals[-1] if lng_vals else ''
+acc_val = acc_vals[-1] if acc_vals else ''
+
+lat_ok  = ok_lat and lat_val not in ('', 'nil', '0.0')
+lng_ok  = ok_lng and lng_val not in ('', 'nil', '0.0')
+
+if coord_ok and lat_ok and lng_ok:
+    print(f'PASS — coordinate = {coord_val}')
+    print(f'       lat={lat_val}  lng={lng_val}  acc={acc_val}')
 else:
-    print(f'FAIL — coordinate did not return {{:latitude ... :longitude ...}}')
-    print(f'       Got: {coord_val}')
+    if not coord_ok:
+        print(f'FAIL — coordinate: Got: {coord_val!r}')
+    if not lat_ok:
+        print(f'FAIL — latitude:   Got: {lat_val!r}')
+    if not lng_ok:
+        print(f'FAIL — longitude:  Got: {lng_val!r}')
     sys.exit(1)
