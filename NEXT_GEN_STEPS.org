@@ -741,40 +741,37 @@ The current ~grease.ios.blocks~ has three hard-coded shapes (~make-void-block~,
 (URLSession upload, CoreBluetooth characteristic reads, HealthKit queries, etc.) needs
 a new C shim today.
 
-** TODO 9.1 ~grease.ios.blocks/make-typed-block~ — arbitrary-signature blocks
+** DONE 9.1 ~grease.ios.blocks/make-typed-block~ — arbitrary-signature blocks
 
-Extend ~grease.ios.blocks~ with a generic factory that takes a return keyword and
-a vector of arg-type keywords (matching the ~encoding-char->kw~ table in
-~grease.ios.invoke~):
+Added ~make-typed-block [ret-kw arg-kws f]~ to ~grease.ios.blocks~.  Dispatches to
+named C shims via ~condp =~ on ~[ret-kw arg-kws]~:
+- ~[:void []]~                            → grease_make_void_block
+- ~[:void [:pointer]]~                    → grease_make_1ptr_block (new)
+- ~[:void [:pointer :pointer]]~           → grease_make_2ptr_block (new)
+- ~[:void [:pointer :pointer :pointer]]~  → grease_make_data_block
+- ~[:void [:pointer :pointer :pointer :pointer]]~ → grease_make_4ptr_block (new)
+- ~[:void [:int8 :pointer]]~              → grease_make_bool_error_block
+- other → throws ~ex-info~
 
-#+begin_src clojure
-(defn make-typed-block
-  "Returns an ObjC heap block with the given signature.
-  ret-kw   — one of :void :pointer :int8 :int32 :int64 :float32 :float64
-  arg-kws  — vector of the same keywords, one per block parameter.
-  f        — Clojure fn receiving one raw arg per entry in arg-kws.
+New C shims added to ~csource/Bridge.m~ and declared in ~Bridge.h~.
+Mock support added to ~mock_bridge.clj~ (~mock-make-typed-block~, updated ~with-mock~).
+Gate: 5 JVM tests in ~test/grease/ios/blocks_test.clj~ — all pass.
 
-  Examples:
-    ;; void (^)(void)
-    (make-typed-block :void [] #(println \"done\"))
+*** DONE 9.1.1 Add C shims to ~csource/Bridge.m~
 
-    ;; void (^)(NSData*, NSURLResponse*, NSError*)
-    (make-typed-block :void [:pointer :pointer :pointer]
-                      (fn [data resp err] ...))
+Added ~grease_make_1ptr_block~, ~grease_make_2ptr_block~, ~grease_make_4ptr_block~.
 
-    ;; void (^)(BOOL, NSError*)
-    (make-typed-block :void [:int8 :pointer]
-                      (fn [ok err] ...))"
-  [ret-kw arg-kws f]
-  ...)
-#+end_src
+*** DONE 9.1.2 Add ~make-typed-block~ to ~src/grease/ios/blocks.clj~
 
-Implementation: use ~grease_make_typed_block~ C shim (to be added to
-~xcode/MobileTest/grease_blocks.m~) that accepts a closure pointer, an encoding
-string, and returns a ~Block_copy~'d heap block.  Model on objcjure's
-~make-block~ (lines 174–198) and the existing ~make-data-block~ shim.
+Dispatches to the right C shim via ~condp~; unsupported shapes throw ~ex-info~.
 
-Gate: JVM test via mock-bridge — ~call-void-block!~ on a typed block invokes fn.
+*** DONE 9.1.3 Add ~mock-make-typed-block~ to ~mock_bridge.clj~ + update ~with-mock~
+
+Returns ~{:block-type :typed :ret ret-kw :args arg-kws :fn f}~, recorded in block-log.
+
+*** DONE 9.1.4 Write ~test/grease/ios/blocks_test.clj~
+
+5 JVM tests (58 total across blocks + invoke + patterns + coerce), 0 failures.
 
 ** TODO 9.2 Wire typed blocks into ~:completion-handler~ pattern
 

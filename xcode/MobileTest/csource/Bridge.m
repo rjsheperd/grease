@@ -277,6 +277,25 @@ void grease_call_void_block(void *block) {
     b();
 }
 
+void *grease_make_1ptr_block(Grease1PtrFn fn) {
+    void (^blk)(void *) = ^(void *a) { fn(a); };
+    void (^heap)(void *) = [blk copy];
+    return (__bridge_retained void *)heap;
+}
+
+void *grease_make_2ptr_block(Grease2PtrFn fn) {
+    void (^blk)(void *, void *) = ^(void *a, void *b) { fn(a, b); };
+    void (^heap)(void *, void *) = [blk copy];
+    return (__bridge_retained void *)heap;
+}
+
+void *grease_make_4ptr_block(Grease4PtrFn fn) {
+    void (^blk)(void *, void *, void *, void *) =
+        ^(void *a, void *b, void *c, void *d) { fn(a, b, c, d); };
+    void (^heap)(void *, void *, void *, void *) = [blk copy];
+    return (__bridge_retained void *)heap;
+}
+
 // =============================================================================
 // Null pointer and main GCD queue shims
 // =============================================================================

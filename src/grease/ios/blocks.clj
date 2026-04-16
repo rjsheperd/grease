@@ -86,3 +86,44 @@
   "Invokes a void block by its opaque pointer. Useful for testing block creation."
   [block]
   (ffi/call "grease_call_void_block" :void :pointer block))
+
+(defn make-typed-block
+  "Returns an ObjC heap block with the given signature.
+
+  - ret-kw  — return type keyword: `:void`, `:pointer`, etc.
+  - arg-kws — vector of arg type keywords, one per block parameter.
+  - f       — Clojure fn called with one raw arg per entry in arg-kws.
+
+  Supported signatures (dispatches to a named C shim):
+  - `[:void []]`                                    → grease_make_void_block
+  - `[:void [:pointer]]`                            → grease_make_1ptr_block
+  - `[:void [:pointer :pointer]]`                   → grease_make_2ptr_block
+  - `[:void [:pointer :pointer :pointer]]`          → grease_make_data_block
+  - `[:void [:pointer :pointer :pointer :pointer]]` → grease_make_4ptr_block
+  - `[:void [:int8 :pointer]]`                      → grease_make_bool_error_block
+
+  Throws `ex-info` for unsupported shapes.
+  Hold the returned pointer in an atom to prevent early release."
+  [ret-kw arg-kws f]
+  (let [cb (make-callback* f arg-kws)]
+    (condp = [ret-kw arg-kws]
+      [:void []]
+      (ffi/call "grease_make_void_block" :pointer :pointer cb)
+
+      [:void [:pointer]]
+      (ffi/call "grease_make_1ptr_block" :pointer :pointer cb)
+
+      [:void [:pointer :pointer]]
+      (ffi/call "grease_make_2ptr_block" :pointer :pointer cb)
+
+      [:void [:pointer :pointer :pointer]]
+      (ffi/call "grease_make_data_block" :pointer :pointer cb)
+
+      [:void [:pointer :pointer :pointer :pointer]]
+      (ffi/call "grease_make_4ptr_block" :pointer :pointer cb)
+
+      [:void [:int8 :pointer]]
+      (ffi/call "grease_make_bool_error_block" :pointer :pointer cb)
+
+      (throw (ex-info "make-typed-block: unsupported block signature"
+                      {:ret ret-kw :args arg-kws})))))

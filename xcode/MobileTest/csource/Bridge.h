@@ -39,10 +39,16 @@ void          *objc_make_selector(const char *s);
 typedef void (*GreaseVoidFn)(void);
 typedef void (*GreaseDataFn)(void *data, void *response, void *error);
 typedef void (*GrallBoolErrFn)(int success, void *error);
+typedef void (*Grease1PtrFn)(void *a);
+typedef void (*Grease2PtrFn)(void *a, void *b);
+typedef void (*Grease4PtrFn)(void *a, void *b, void *c, void *d);
 
 void *grease_make_void_block(GreaseVoidFn fn);
 void *grease_make_data_block(GreaseDataFn fn);
 void *grease_make_bool_error_block(GrallBoolErrFn fn);
+void *grease_make_1ptr_block(Grease1PtrFn fn);
+void *grease_make_2ptr_block(Grease2PtrFn fn);
+void *grease_make_4ptr_block(Grease4PtrFn fn);
 
 // Testing helper: invoke a void block by its opaque pointer.
 void  grease_call_void_block(void *block);

@@ -116,6 +116,13 @@
     (swap! block-log conj sentinel)
     sentinel))
 
+(defn mock-make-typed-block
+  "Records a typed block creation and returns a sentinel map containing the wrapped fn."
+  [ret-kw arg-kws f]
+  (let [sentinel {:block-type :typed :ret ret-kw :args arg-kws :fn f}]
+    (swap! block-log conj sentinel)
+    sentinel))
+
 (defn invoke-block!
   "Invokes a captured block sentinel's wrapped fn with the given args.
   Use in tests to simulate the iOS runtime invoking a completion handler."
@@ -138,7 +145,8 @@
                  grease.ios.foundation/main-queue           mock-main-queue
                  grease.ios.blocks/make-void-block          mock-make-void-block
                  grease.ios.blocks/make-data-block          mock-make-data-block
-                 grease.ios.blocks/make-bool-error-block    mock-make-bool-error-block]
+                 grease.ios.blocks/make-bool-error-block    mock-make-bool-error-block
+                 grease.ios.blocks/make-typed-block         mock-make-typed-block]
      (clear!)
      ~@body))
 
