@@ -47,27 +47,23 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
 
             // ── Title ──────────────────────────────────────────────────────
-            HStack(spacing: 12) {
-                ClojureLogo(size: 44)
-                VStack(spacing: 1) {
-                    HStack(spacing: 8) {
-                        Text("Clojure")
-                            .font(.system(size: 26, weight: .black, design: .rounded))
-                            .foregroundColor(clojureTeal)
-                        AppleLogo(size: 26)
-                        Text("Bridge")
-                            .font(.system(size: 26, weight: .black, design: .rounded))
-                            .foregroundColor(.white)
-                    }
-                    Text("GraalVM · SCI · nREPL")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.55))
+            VStack(spacing: 4) {
+                HStack(spacing: 10) {
+                    ClojureLogo(size: 44)
+                    Text("Clojure")
+                        .font(.system(size: 26, weight: .black, design: .rounded))
+                        .foregroundColor(clojureTeal)
+                    AppleLogo(size: 26)
+                    Text("Bridge")
+                        .font(.system(size: 26, weight: .black, design: .rounded))
+                        .foregroundColor(.white)
                 }
-                Spacer()
+                Text("GraalVM · SCI · nREPL")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.55))
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
             .background(Color.indigo.ignoresSafeArea(edges: .top))
 
             // ── Status cards ───────────────────────────────────────────────
@@ -150,7 +146,7 @@ struct ContentView: View {
             .padding(.horizontal)
             .padding(.bottom)
         }
-        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea(edges: [])
         .onReceive(ticker) { _ in poll() }
         .onAppear {
             let raw = call_hash_code()
