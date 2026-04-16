@@ -163,15 +163,19 @@
   [[java.nio.ByteBuffer/allocateDirect]] because dtype's [[ffi/call-ptr]]
   calls [[tech.v3.datatype.protocols/PToNativeBuffer]] on struct args to
   obtain the raw memory address.  A bare DirectByteBuffer does not implement
-  that protocol; a dtype NativeBuffer does."
+  that protocol; a dtype NativeBuffer does.
+
+  Copies bytes via [[native-buffer/write-long]] with raw byte offsets.
+  In the GraalVM native image, malloc returns a buffer with effective
+  element byte-width of 1, so write-long(i, v) writes at addr + i * 1 —
+  byte offsets must be passed directly, not element indices."
   [struct-name m]
   (let [bb   (structs/pack struct-name m)
         size (:size (structs/struct-for struct-name))
-        arr  (byte-array size)
         nbuf (native-buffer/malloc size {:resource-type :gc})]
     (.position bb 0)
-    (.get bb arr)
-    (.put (native-buffer/native-buffer->nio-buf nbuf) arr)
+    (dotimes [i (quot size 8)]
+      (native-buffer/write-long nbuf (* i 8) (.getLong bb (* i 8))))
     (dt-struct/inplace-new-struct (keyword struct-name) nbuf)))
 
 ;; =============================================================================
