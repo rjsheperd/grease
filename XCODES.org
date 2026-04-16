@@ -1,0 +1,151 @@
+#+TITLE: Xcode Version Management via xcodes + Nix
+#+DATE: 2026-04-15
+
+* Problem
+
+The current setup hardcodes a single Xcode path tied to a specific external
+volume UUID in both =.envrc= and =flake.nix=:
+
+#+begin_example
+/Volumes/MegaDisk2TB/XCode/AF56C562-.../Xcode.app/Contents/Developer
+#+end_example
+
+If that volume is not mounted, or if the build runs on a different machine,
+every build script fails immediately.
+
+* Solution Overview
+
+Use [[https://github.com/XcodesOrg/xcodes][xcodes]] (available in nixpkgs ≥ 1.6.0) to detect, install, and activate
+Xcode 14.3.1 from within the Nix dev shell. The shell hook derives
+=XCODE_DEVELOPER_DIR= dynamically from =xcodes= rather than hardcoding it.
+
+=xcodes= key properties:
+- Installs specific Xcode versions by number (e.g. =xcodes install 14.3.1=)
+- Respects =XCODES_DIRECTORY= for custom install locations
+- =xcodes installed= prints paths for all installed versions — parseable in shell
+- Credentials via =XCODES_USERNAME= / =XCODES_PASSWORD= env vars (supports CI)
+- Already packaged in nixpkgs (verify presence in =nixos-25.11= or switch input to =nixos-unstable=)
+
+* Step 1 — Add =xcodes= to =flake.nix= buildInputs
+
+#+begin_src nix
+buildInputs = with pkgs; [
+  clojure
+  autoconf
+  fastlane
+  xcodes   # ← add this
+];
+#+end_src
+
+No overlay needed — =xcodes= is in nixpkgs under that exact name.
+
+* Step 2 — Replace hardcoded Xcode path with dynamic detection in shellHook
+
+Remove the static let-bindings:
+
+#+begin_src nix
+# REMOVE these:
+xcodeApp = "/Volumes/MegaDisk2TB/XCode/AF56C562-4191-470B-AECA-8CBE68A2E188/Xcode.app";
+xcodeDeveloperDir = "${xcodeApp}/Contents/Developer";
+#+end_src
+
+Replace the Xcode section of the shellHook with:
+
+#+begin_src bash
+# Detect Xcode 14.3.1 installed by xcodes.
+# xcodes prints lines like:
+#   14.3.1  /Applications/Xcode-14.3.1.app  (Selected)
+_xcodes_path=$(xcodes installed 2>/dev/null \
+  | awk '/14\.3\.1/ { print $2 }' \
+  | head -1)
+
+if [ -n "$_xcodes_path" ] && [ -d "$_xcodes_path" ]; then
+  export XCODE_DEVELOPER_DIR="$_xcodes_path/Contents/Developer"
+  export DEVELOPER_DIR="$XCODE_DEVELOPER_DIR"
+
+  _active=$(xcode-select -p 2>/dev/null)
+  if [ "$_active" != "$XCODE_DEVELOPER_DIR" ]; then
+    echo "INFO: Activating Xcode 14.3.1 — running sudo xcode-select"
+    sudo xcode-select -s "$_xcodes_path" 2>/dev/null \
+      || echo "WARNING: sudo xcode-select failed — run it manually:"
+    echo "  sudo xcode-select -s $_xcodes_path"
+  else
+    echo "Environment loaded! Xcode 14.3.1 active."
+  fi
+else
+  echo ""
+  echo "WARNING: Xcode 14.3.1 not found via xcodes."
+  echo "Install it with:"
+  echo "  XCODES_USERNAME=you@example.com xcodes install 14.3.1"
+  echo "  (set XCODES_USERNAME and XCODES_PASSWORD in .envrc for automation)"
+  echo ""
+fi
+unset _xcodes_path _active
+#+end_src
+
+* Step 3 — Update =.envrc= to remove the hardcoded path
+
+Remove the static line:
+
+#+begin_src bash
+# REMOVE:
+export XCODE_DEVELOPER_DIR="/Volumes/MegaDisk2TB/XCode/AF56C562-4191-470B-AECA-8CBE68A2E188/Xcode.app/Contents/Developer"
+#+end_src
+
+=XCODE_DEVELOPER_DIR= is now set by =nix develop= via the shellHook. Add
+credential variables instead (both =.envrc= and =.envrc.example=):
+
+#+begin_src bash
+# xcodes credentials — used by `xcodes install` to download Xcode from Apple.
+# Use an app-specific password from appleid.apple.com (not your Apple ID password).
+export XCODES_USERNAME="your@appleid.com"
+export XCODES_PASSWORD="your-app-specific-password"
+
+# Optional: override where xcodes installs Xcode (default: /Applications).
+# Useful when the system drive is tight on space.
+# export XCODES_DIRECTORY="/Volumes/ExternalDisk/Xcode"
+#+end_src
+
+* Step 4 — One-time Xcode 14.3.1 install (first-time setup)
+
+Add the following to =CLAUDE.md= setup docs as a one-time prerequisite step:
+
+#+begin_src bash
+# Enter the Nix dev shell — xcodes is now on PATH
+nix develop
+
+# Install Xcode 14.3.1 (~7.5 GB download, ~10-15 min)
+xcodes install 14.3.1
+
+# If the system drive is short on space, install to an external volume:
+XCODES_DIRECTORY=/Volumes/ExternalDisk/Xcode xcodes install 14.3.1
+
+# Re-enter the shell — it will detect and activate Xcode 14.3.1 automatically
+exit && nix develop
+#+end_src
+
+* Step 5 — No changes needed to build scripts
+
+=scripts/build-demo-app= and companions already read =XCODE_DEVELOPER_DIR= from
+the environment (it is declared as a required env var at line 57 and never
+hardcoded inside the scripts). As long as =nix develop= sets it correctly, the
+scripts work unchanged.
+
+* Caveats
+
+| Issue                     | Notes                                                                                                |
+|---------------------------+------------------------------------------------------------------------------------------------------|
+| Apple ID auth             | =xcodes install= requires credentials. 2FA is prompted once on first use and then cached.            |
+| =sudo xcode-select=       | Still required after install. shellHook attempts it; user runs it manually if sudo needs a password. |
+| nixpkgs version           | xcodes 1.6.0 is confirmed in =nixos-unstable=. Verify it is present in the pinned =nixos-25.11= input; switch to unstable if missing. |
+| Simulator runtimes        | =xcodes runtimes install= has a known TTY bug (XcodesOrg/xcodes#455) — do not call it from the shellHook. |
+
+* Summary of File Changes
+
+| File             | Change                                                                      |
+|------------------+-----------------------------------------------------------------------------|
+| =flake.nix=      | Add =xcodes= to buildInputs; replace hardcoded let-bindings with dynamic shellHook detection |
+| =.envrc=         | Remove hardcoded =XCODE_DEVELOPER_DIR=; add =XCODES_USERNAME= / =XCODES_PASSWORD= |
+| =.envrc.example= | Same as above with placeholder values                                       |
+| =CLAUDE.md=      | Add one-time =xcodes install 14.3.1= step to setup prerequisites           |
+| =scripts/=       | No changes required                                                         |

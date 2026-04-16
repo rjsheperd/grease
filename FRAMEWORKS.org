@@ -9,7 +9,6 @@
 | CoreImage               | Graphics & Rendering       | https://developer.apple.com/documentation/coreimage               | SCRAPED  |
 | CoreGraphics            | Graphics & Rendering       | https://developer.apple.com/documentation/coregraphics            | SCRAPED  |
 | CoreText                | Graphics & Rendering       | https://developer.apple.com/documentation/coretext                | SCRAPED  |
-| CoreAnimation           | Graphics & Rendering       | https://developer.apple.com/documentation/coreanimation           |          |
 | QuartzCore              | Graphics & Rendering       | https://developer.apple.com/documentation/quartzcore              | SCRAPED  |
 | ImageIO                 | Graphics & Rendering       | https://developer.apple.com/documentation/imageio                 | SCRAPED  |
 | Metal                   | Graphics & Rendering       | https://developer.apple.com/documentation/metal                   | SCRAPED  |

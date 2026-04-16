@@ -1,94 +1,166 @@
-name: mobiletest
+name: Build grease iOS app
+
+# Produces an unsigned MobileTest.app for iphoneos arm64.
+# Mirrors the structure of ios-graal-jdk-21/build-ios-libs.yml:
+#   – maxim-lobanov/setup-xcode for Xcode version management
+#   – per-stage caching (GraalVM, iOS JDK libs, bb.o)
+#   – publishes a GitHub Release on tag push
+#
+# Code signing (deploy-demo-app) requires Xcode 14.3.1 and device credentials.
+# That step is NOT run here; the artifact is unsigned and suitable for
+# re-signing locally via scripts/deploy-demo-app.
 
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
+env:
+  # Gluon GraalVM — provides native-image with iOS arm64 cross-compilation.
+  # Update both vars together when upgrading.
+  GLUON_VERSION:  "gluon-23+25.1-dev"
+  GLUON_FILENAME: "graalvm-java23-darwin-aarch64-gluon-23+25.1-dev"
+
+  # Sibling repo that produces libjava.a / libjvm.a / static JDK libs.
+  IOS_JDK_REPO: "rjsheperd/ios-graal-jdk-21"
+
 jobs:
+  build:
+    runs-on: macos-15
 
-  mac:
-    runs-on: macos-14
     steps:
-      - name: Git checkout
-        uses: actions/checkout@v1
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Xcode ─────────────────────────────────────────────────────────────
+      # setup-xcode switches between pre-installed versions on the runner.
+      # latest-stable is fine for building an unsigned artifact; device signing
+      # (deploy-demo-app) requires Xcode 14.3.1 and must be done locally.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
         with:
-          fetch-depth: 1
-          submodules: 'true'
+          xcode-version: latest-stable
 
-      # - uses: actions/download-artifact@v1
-      #   with:
-      #     name: jar
-      #     path: .
+      # Capture the active Xcode path — read by build-demo-app instead of the
+      # hardcoded local volume path in .envrc.
+      - name: Export XCODE_DEVELOPER_DIR
+        run: echo "XCODE_DEVELOPER_DIR=$(xcode-select -p)" >> $GITHUB_ENV
 
-      # - name: Cache GraalVM
-      #   uses: actions/cache@v1
-      #   id: cache-graalvm-m1
-      #   with:
-      #     path: ~/graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final
-      #     key: ${{ runner.os }}-graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final
-      #     restore-keys: |
-      #           ${{ runner.os }}-graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final
-
+      # ── Clojure ───────────────────────────────────────────────────────────
       - name: Setup Clojure
-        # You may pin to the exact commit or the version.
-        # uses: DeLaGuardo/setup-clojure@5042876523f30f5efcf1d6feaa48bd1498d7814f
         uses: DeLaGuardo/setup-clojure@12.5
         with:
-          # Clojure CLI version to make available on the path.
-          cli: 1.11.1.1435
+          cli: latest
 
-      - name: Install dependencies
-        run: clojure -P
-
-      - name: Download GraalVM
-        run: |
-          cd ~
-          if ! [ -d graalvm-ce-java17-22.0.0.2 ]; then
-            curl -O -sL "https://github.com/gluonhq/graal/releases/download/gluon-22.1.0.1-Final/graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final.tar.gz"
-            sudo xattr -r -d com.apple.quarantine graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final.tar.gz
-            tar xzf graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final.tar.gz
-          fi
-
-      # - name: Install Graalvm components
-      #   run: |
-          # export GRAALVM_HOME="$HOME/graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final/Contents/Home"
-          # $GRAALVM_HOME/bin/gu install llvm-toolchain
-          # $GRAALVM_HOME/bin/gu install native-image
-
-      # - name: Cache Static JDK
-      #   uses: actions/cache@v3
-      #   with:
-      #     key: staticjdk
-      #     path: |
-      #       build/staticjdk
-      #       build/
-
-      - name: Download Static JDK
-        run: |
-          scripts/download-deps
-
-      - name: Build macOS native image
-        run: |
-          export GRAALVM_HOME="$HOME/graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final/Contents/Home"
-          export JAVA_HOME="$GRAALVM_HOME"
-          export PATH="$JAVA_HOME/bin:$PATH"
-          /bin/bash scripts/compile-shared
-
-      - uses: actions/upload-artifact@v1
+      # ── Gluon GraalVM ─────────────────────────────────────────────────────
+      - name: Cache Gluon GraalVM
+        id: cache-graalvm
+        uses: actions/cache@v4
         with:
-          path: library/build/out/bb.o
-          name: bb.o
-      - uses: actions/upload-artifact@v1
-        with:
-          path: target/bb.jar
-          name: bb.jar
+          path: graal
+          key: gluon-graalvm-${{ env.GLUON_VERSION }}-v1
 
-      - name: Build app
+      - name: Download Gluon GraalVM
+        if: steps.cache-graalvm.outputs.cache-hit != 'true'
         run: |
-          export GRAALVM_HOME="$HOME/graalvm-svm-java17-darwin-m1-gluon-22.1.0.1-Final/Contents/Home"
-          export JAVA_HOME="$GRAALVM_HOME"
-          export PATH="$JAVA_HOME/bin:$PATH"
-          scripts/build-shared
+          mkdir -p graal
+          curl -L -o graal/gluon-graalvm.tar.gz \
+            "https://github.com/gluonhq/graal/releases/download/${{ env.GLUON_VERSION }}/${{ env.GLUON_FILENAME }}.tar.gz"
+          sudo xattr -r -d com.apple.quarantine graal/gluon-graalvm.tar.gz 2>/dev/null || true
+          tar -xzf graal/gluon-graalvm.tar.gz -C graal/
+          rm graal/gluon-graalvm.tar.gz
 
+      - name: Set GRAALVM_HOME
+        run: |
+          GRAAL_HOME="$PWD/graal/${{ env.GLUON_FILENAME }}/Contents/Home"
+          echo "GRAALVM_HOME=$GRAAL_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$GRAAL_HOME"    >> $GITHUB_ENV
+          echo "$GRAAL_HOME/bin"          >> $GITHUB_PATH
 
+      # ── iOS JDK libraries (from ios-graal-jdk-21 releases) ───────────────
+      # Resolve the latest release tag first so the cache key is stable.
+      - name: Resolve ios-graal-jdk-21 release tag
+        id: ios-jdk-tag
+        run: |
+          TAG=$(gh release view --repo ${{ env.IOS_JDK_REPO }} --json tagName -q .tagName)
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cache iOS JDK libs
+        id: cache-ios-libs
+        uses: actions/cache@v4
+        with:
+          path: lib/ios-arm64
+          key: ios-jdk-libs-${{ steps.ios-jdk-tag.outputs.tag }}-v1
 
+      - name: Download iOS JDK libs
+        if: steps.cache-ios-libs.outputs.cache-hit != 'true'
+        run: |
+          gh release download \
+            --repo ${{ env.IOS_JDK_REPO }} \
+            --tag  ${{ steps.ios-jdk-tag.outputs.tag }} \
+            --pattern ios-jdk-libs-arm64.zip \
+            --output ios-jdk-libs-arm64.zip
+          # Zip layout: ios-arm64/lib/{libjava,libjvm}.a  ios-arm64/static/*.a
+          unzip -q ios-jdk-libs-arm64.zip -d lib/
+          rm ios-jdk-libs-arm64.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Build bb.o (Clojure → uberjar → native-image) ────────────────────
+      # Cached by a hash of all source that affects the native image output.
+      - name: Cache bb.o
+        id: cache-bbo
+        uses: actions/cache@v4
+        with:
+          path: build/bb
+          key: bb-o-${{ hashFiles('src/**', 'resources/**', 'deps.edn', 'build.clj', 'conf/*.json') }}
+
+      - name: Build bb.o
+        if: steps.cache-bbo.outputs.cache-hit != 'true'
+        run: ./scripts/build-bb-o
+        env:
+          IOS_GRAAL_LIBS:   ${{ github.workspace }}/lib/ios-arm64/lib
+          IOS_GRAAL_STATIC: ${{ github.workspace }}/lib/ios-arm64/static
+
+      # ── Build MobileTest.app ──────────────────────────────────────────────
+      # build-demo-app generates an xcconfig with CODE_SIGNING_REQUIRED=NO /
+      # CODE_SIGNING_ALLOWED=NO so the output is always unsigned in CI.
+      - name: Build MobileTest.app
+        run: ./scripts/build-demo-app
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          IOS_GRAAL_LIBS:   ${{ github.workspace }}/lib/ios-arm64/lib
+          IOS_GRAAL_STATIC: ${{ github.workspace }}/lib/ios-arm64/static
+          CONFIGURATION:    Release
+
+      # ── Collect and upload ─────────────────────────────────────────────────
+      - name: Find MobileTest.app
+        id: find-app
+        run: |
+          APP=$(find ~/Library/Developer/Xcode/DerivedData \
+            -name "MobileTest.app" -maxdepth 10 2>/dev/null | head -1)
+          echo "path=$APP" >> $GITHUB_OUTPUT
+
+      - name: Upload MobileTest.app
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileTest-app-${{ github.sha }}
+          path: ${{ steps.find-app.outputs.path }}
+          retention-days: 30
+
+      # ── GitHub Release (tag pushes only) ──────────────────────────────────
+      - name: Create release archive
+        if: startsWith(github.ref, 'refs/tags/')
+        run: zip -r MobileTest-app.zip "${{ steps.find-app.outputs.path }}"
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MobileTest-app.zip
+          generate_release_notes: true

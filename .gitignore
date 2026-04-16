@@ -19,6 +19,7 @@ xcuserdata
 *~.nib
 
 build/
+.cache/
 
 # user-specific XCode stuff
 xcuserdata
