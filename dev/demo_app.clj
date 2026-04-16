@@ -65,14 +65,20 @@
 ;; Tab bar construction
 ;; ─────────────────────────────────────────────────────────────────────────────
 
+(defn- system-image
+  "Returns a UIImage for the given SF Symbol name."
+  [sym-name]
+  (objc-rt/msg-send :pointer (get-class "UIImage")
+                    "systemImageNamed:" :pointer (f/->nsstring sym-name)))
+
 (defn- make-tab-item!
-  "Creates a UITabBarItem with a text title, no image, and the given tag."
-  [title tag]
+  "Creates a UITabBarItem with a title, SF Symbol image, and tag."
+  [title sym-name tag]
   (objc-rt/msg-send :pointer
                     (objc-rt/msg-send :pointer (get-class "UITabBarItem") "alloc")
                     "initWithTitle:image:tag:"
                     :pointer (f/->nsstring title)
-                    :pointer (f/null-ptr)
+                    :pointer (system-image sym-name)
                     :int64   tag))
 
 (defn- make-plain-vc!
@@ -94,8 +100,8 @@
          info-vc (make-plain-vc! "systemGroupedBackgroundColor")
          tab-bar (new-instance "UITabBarController")
          vcs     (f/->nsarray [map-vc info-vc])]
-     (objc-rt/msg-send :void map-vc  "setTabBarItem:" :pointer (make-tab-item! "Map"  0))
-     (objc-rt/msg-send :void info-vc "setTabBarItem:" :pointer (make-tab-item! "Info" 1))
+     (objc-rt/msg-send :void map-vc  "setTabBarItem:" :pointer (make-tab-item! "Map"  "map"          0))
+     (objc-rt/msg-send :void info-vc "setTabBarItem:" :pointer (make-tab-item! "Info" "info.circle"  1))
      (objc-rt/msg-send :void tab-bar "setViewControllers:animated:"
                        :pointer vcs :int8 0)
      (let [white (objc-rt/msg-send :pointer (get-class "UIColor") "whiteColor")
@@ -157,6 +163,8 @@
   (when-not @map-following?
     (enable-map-follow!)
     (reset! map-following? true))
+  (when-let [mv (:map-view @app-state)]
+    (m/add-circle! mv (loc/latitude loc) (loc/longitude loc) 0.2))
   (info/update! (:info-labels @app-state) loc))
 
 ;; ─────────────────────────────────────────────────────────────────────────────

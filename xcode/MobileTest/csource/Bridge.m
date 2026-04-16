@@ -397,6 +397,59 @@ double grease_location_accuracy(void *location) {
 }
 
 // =============================================================================
+// MKCircle overlay shim
+//
+// Adds (or replaces) a circle overlay on an MKMapView centred on the given
+// coordinates with the given radius in metres.  Takes scalar args to avoid the
+// CLLocationCoordinate2D struct-arg FFI problem.
+//
+// A static GreaseCircleDelegate handles rendererForOverlay: so the caller
+// does not need to set a separate delegate.  Any existing MKCircle overlays
+// are removed before the new one is added so repeated calls update in place.
+// =============================================================================
+
+@interface GreaseCircleDelegate : NSObject <MKMapViewDelegate>
+@end
+
+@implementation GreaseCircleDelegate
+- (MKOverlayRenderer *)mapView:(MKMapView *)mapView
+            rendererForOverlay:(id<MKOverlay>)overlay {
+    if ([overlay isKindOfClass:[MKCircle class]]) {
+        MKCircleRenderer *r = [[MKCircleRenderer alloc] initWithCircle:(MKCircle *)overlay];
+        r.fillColor   = [[UIColor systemBlueColor] colorWithAlphaComponent:0.12];
+        r.strokeColor = [UIColor systemBlueColor];
+        r.lineWidth   = 2.0;
+        return r;
+    }
+    return nil;
+}
+@end
+
+static GreaseCircleDelegate *sCircleDelegate = nil;
+
+void grease_map_add_circle(void *mapView,
+                           double lat, double lng,
+                           double radius_meters) {
+    MKMapView *mv = (__bridge MKMapView *)mapView;
+    if (!sCircleDelegate) {
+        sCircleDelegate = [[GreaseCircleDelegate alloc] init];
+    }
+    if (!mv.delegate) {
+        mv.delegate = sCircleDelegate;
+    }
+    // Remove any existing circle overlays
+    NSMutableArray *toRemove = [NSMutableArray array];
+    for (id<MKOverlay> o in mv.overlays) {
+        if ([o isKindOfClass:[MKCircle class]]) [toRemove addObject:o];
+    }
+    if (toRemove.count) [mv removeOverlays:toRemove];
+    // Add new circle
+    CLLocationCoordinate2D centre = CLLocationCoordinate2DMake(lat, lng);
+    MKCircle *circle = [MKCircle circleWithCenterCoordinate:centre radius:radius_meters];
+    [mv addOverlay:circle level:MKOverlayLevelAboveRoads];
+}
+
+// =============================================================================
 // UIScreen bounds accessors
 //
 // UIScreen.mainScreen.bounds returns CGRect — a struct.

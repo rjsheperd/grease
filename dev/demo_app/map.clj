@@ -50,6 +50,8 @@
 ;; User location tracking
 ;; ─────────────────────────────────────────────────────────────────────────────
 
+(def ^:private miles->meters 1609.344)
+
 (defn follow-user!
   "Switches map-view to MKUserTrackingModeFollow (value 1) so MapKit keeps the
   map centered on the GPS fix automatically. Safe to call from any thread —
@@ -60,3 +62,15 @@
      (objc-rt/msg-send :void map-view
                        "setUserTrackingMode:animated:"
                        :int64 1 :int8 1))))
+
+(defn add-circle!
+  "Adds (or updates) a translucent blue circle overlay on map-view centred on
+  [lat lng] with the given radius in miles. Safe to call from any thread."
+  [map-view lat lng radius-miles]
+  (grease/dispatch-main-async
+   (fn []
+     (ffi/call "grease_map_add_circle" :void
+               :pointer map-view
+               :float64 lat
+               :float64 lng
+               :float64 (* radius-miles miles->meters)))))
