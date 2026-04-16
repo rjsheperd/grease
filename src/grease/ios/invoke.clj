@@ -150,6 +150,14 @@
   Resolved once on first struct dispatch."
   (delay (ffi/dlsym ffi/RTLD_DEFAULT (dt-ffi/string->c "objc_msgSend"))))
 
+(defn- bb-get-long
+  "Reads a long from buf at absolute byte offset.
+  The ^ByteBuffer type hint causes SCI to resolve getLong via
+  java.nio.ByteBuffer (allPublicMethods in GraalVM reflection config)
+  rather than the runtime HeapByteBuffer subclass (not in config)."
+  [^java.nio.ByteBuffer buf ^long offset]
+  (.getLong buf (int offset)))
+
 (defn- clj->dt-struct
   "Converts a Clojure keyword map to a native-heap dt-struct instance for use
   as a struct-valued argument in [[ffi/call-ptr]].
@@ -175,7 +183,7 @@
         nbuf (native-buffer/malloc size {:resource-type :gc})]
     (.position bb 0)
     (dotimes [i (quot size 8)]
-      (native-buffer/write-long nbuf (* i 8) (.getLong bb (* i 8))))
+      (native-buffer/write-long nbuf (* i 8) (bb-get-long bb (* i 8))))
     (dt-struct/inplace-new-struct (keyword struct-name) nbuf)))
 
 ;; =============================================================================
