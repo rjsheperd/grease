@@ -118,9 +118,9 @@
         (throw (ex-info (str "Unknown struct field type: " field-type) {:type field-type})))
       (let [nested-buf (pack field-type val)
             bytes      (byte-array (:size nested-spec))]
-        (doto (.duplicate nested-buf)
-          (.position 0)
-          (.get bytes))
+        ;; pack returns buf at position 0; call .get directly to avoid
+        ;; .duplicate which SCI treats as a field access (NoSuchFieldException)
+        (.get nested-buf bytes)
         (.position buf field-offset)
         (.put buf bytes)
         (.position buf 0)))))
