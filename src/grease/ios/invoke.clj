@@ -6,10 +6,13 @@
   and coerces the return value back to Clojure.
 
   This namespace depends on:
-  - [[grease.ios.objc/msg-send]] — the actual bridge (mockable in tests)
-  - [[grease.ios.types]]         — coerce-in / coerce-out / encoding-for
-  - [[grease.ios.registry]]      — method-spec / class-spec
-  - [[grease.ios.structs]]       — struct layout / pack / unpack
+  - [[grease.ios.objc/msg-send]]          — the actual bridge (mockable in tests)
+  - [[grease.ios.types]]                  — coerce-in / coerce-out / encoding-for
+  - [[grease.ios.registry]]               — method-spec / class-spec
+  - [[grease.ios.structs]]                — struct layout / pack / unpack
+  - [[tech.v3.datatype.ffi]]              — string->c for msg-send function pointer
+  - [[tech.v3.datatype.struct]]           — dt-struct type registry and inplace-new-struct
+  - [[java.nio.ByteBuffer/allocateDirect]]— off-heap buffer for struct-arg packing
 
   Struct arguments and struct returns both use [[ffi/call-ptr]] with
   composite [[dt-struct/define-datatype!]] types.  libffi generates correct
@@ -27,7 +30,6 @@
             [grease.ios.patterns :as patterns]
             [grease.ios.structs :as structs]
             [grease.ios.types :as types]
-            [tech.v3.datatype :as dtype]
             [tech.v3.datatype.ffi :as dt-ffi]
             [tech.v3.datatype.struct :as dt-struct]))
 
@@ -126,18 +128,22 @@
   as a struct-valued argument in [[ffi/call-ptr]].
 
   Uses [[structs/pack]] (ByteBuffer) as the layout source of truth, then
-  copies the bytes into a GC-tracked native allocation and wraps it with
+  copies the bytes into a direct (off-heap) ByteBuffer and wraps it with
   [[dt-struct/inplace-new-struct]].  [[ensure-ffi-struct!]] must be called
-  for struct-name before this function."
+  for struct-name before this function.
+
+  Uses java.nio.ByteBuffer/allocateDirect instead of dtype/make-container to
+  avoid requiring tech.v3.datatype (not in the SCI namespace registry)."
   [struct-name m]
   (let [bb   (structs/pack struct-name m)
         size (:size (structs/struct-for struct-name))
         arr  (byte-array size)]
     (.position bb 0)
     (.get bb arr)
-    (dt-struct/inplace-new-struct
-     (keyword struct-name)
-     (dtype/make-container :native-heap :int8 arr {:resource-type :gc}))))
+    (let [direct (java.nio.ByteBuffer/allocateDirect size)]
+      (.put direct arr)
+      (.rewind direct)
+      (dt-struct/inplace-new-struct (keyword struct-name) direct))))
 
 ;; =============================================================================
 ;; Auto-coercion for id-typed arguments
