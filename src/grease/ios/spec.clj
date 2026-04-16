@@ -9,7 +9,7 @@
     (spec/load-one path)      ;; -> validated spec map
     (spec/validate spec)      ;; -> spec, or throws ex-info on failure"
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]))
+            [grease.ios-host :as host]))
 
 ;; =============================================================================
 ;; Structural validation
@@ -67,10 +67,10 @@
   path must be a classpath-relative string, e.g. ~\"grease/api-specs/Foundation.edn\"~.
   Returns the validated spec map, or throws if missing or structurally invalid."
   [path]
-  (let [res (io/resource path)]
-    (when-not res
+  (let [content (host/read-resource path)]
+    (when-not content
       (throw (ex-info (str "Cannot find spec on classpath: " path) {:path path})))
-    (-> (slurp res)
+    (-> content
         edn/read-string
         validate)))
 
@@ -78,10 +78,10 @@
   "Reads ~resources/grease/api-specs/manifest.edn~ and loads every spec listed.
   Returns a map of framework-name-string -> validated spec map."
   []
-  (let [manifest-res (io/resource "grease/api-specs/manifest.edn")]
-    (when-not manifest-res
+  (let [manifest-content (host/read-resource "grease/api-specs/manifest.edn")]
+    (when-not manifest-content
       (throw (ex-info "Cannot find grease/api-specs/manifest.edn on classpath" {})))
-    (let [{:keys [specs]} (edn/read-string (slurp manifest-res))]
+    (let [{:keys [specs]} (edn/read-string manifest-content)]
       (into {}
             (map (fn [path]
                    (let [spec (load-one path)]

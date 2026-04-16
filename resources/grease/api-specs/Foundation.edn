@@ -84,7 +84,11 @@
      :args     []
      :return   "NSMutableArray"}]
    :methods
-   [{:selector "addObject:"
+   [{:selector "count"
+     :encoding "Q@:"
+     :args     []
+     :return   "NSUInteger"}
+    {:selector "addObject:"
      :encoding "v@:@"
      :args     [{:name "object" :type "id" :nullable false}]
      :return   "void"}]

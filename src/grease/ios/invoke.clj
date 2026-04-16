@@ -94,3 +94,20 @@
   [class-name sel-str method-spec arg-vals]
   (let [cls (grease/get-objc-class class-name)]
     (dispatch! cls sel-str method-spec arg-vals)))
+
+(defn dispatch-class-raw!
+  "Like [[dispatch-class!]] but skips [[types/coerce-out]] so the raw ObjC
+  pointer is returned.  Use this when the caller will wrap the pointer in
+  an opaque handle (e.g. [[grease.ios.api/ObjcObject]]) and does not want
+  the pointer coerced to a Clojure value."
+  [class-name sel-str method-spec arg-vals]
+  (let [cls (grease/get-objc-class class-name)
+        {:keys [ret arg-types]} (parse-encoding (:encoding method-spec))
+        arg-specs  (:args method-spec)
+        typed-args (mapcat (fn [spec kw val]
+                             (let [coerced (if (:pattern spec)
+                                             (patterns/wrap-arg spec val)
+                                             (types/coerce-in (:type spec "id") val))]
+                               [kw coerced]))
+                           arg-specs arg-types arg-vals)]
+    (apply objc/msg-send ret cls sel-str typed-args)))

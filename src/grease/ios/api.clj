@@ -95,7 +95,7 @@
   Returns an [[ObjcObject]] wrapping the new instance pointer."
   [class-name selector & args]
   (let [method (require-method class-name selector)
-        ptr    (invoke/dispatch-class! class-name selector method args)]
+        ptr    (invoke/dispatch-class-raw! class-name selector method args)]
     (->ObjcObject class-name ptr)))
 
 ;; =============================================================================

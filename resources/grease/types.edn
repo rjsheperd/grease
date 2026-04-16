@@ -113,6 +113,6 @@
 
  "CString"
  {:encoding "*"
-  :clj :pointer
-  :coerce-in  clojure.core/identity
-  :coerce-out clojure.core/identity}}
+  :clj :string
+  :coerce-in  tech.v3.datatype.ffi/string->c
+  :coerce-out tech.v3.datatype.ffi/c->string}}

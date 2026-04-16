@@ -15,7 +15,11 @@
    :superclass  "NSObject"
    :main-thread? true
    :init
-   [{:selector "init"
+   [{:selector "new"
+     :encoding "@@:"
+     :args     []
+     :return   "CLLocationManager"}
+    {:selector "init"
      :encoding "@@:"
      :args     []
      :return   "id"}]

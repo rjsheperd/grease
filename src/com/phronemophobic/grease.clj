@@ -59,6 +59,10 @@
 ;; Eval via SCI (called from Bridge.m)
 ;; =============================================================================
 
+;; Captures the engine preload error (if any) so it can be read via nREPL.
+;; Check with: @com.phronemophobic.grease/engine-load-error
+(def engine-load-error (atom nil))
+
 (def results (atom {:results {}
                     :id 0}))
 
@@ -218,6 +222,20 @@
          ;; dtype FFI helpers
         (scify/ns->ns-map 'tech.v3.datatype.ffi)
 
+         ;; grease.ios-host — JVM-side I/O helpers for engine namespace loading.
+         ;; read-resource loads a classpath resource and returns its content as a
+         ;; UTF-8 string, or nil if the resource does not exist.
+         ;; Engine namespaces require this because clojure.java.io is not available
+         ;; in the frozen GraalVM native-image SCI context.
+        (let [host-ns (sci/create-ns 'grease.ios-host nil)]
+          {'grease.ios-host
+           {'read-resource
+            (sci/new-var 'read-resource
+                         (fn [path]
+                           (when-let [url (io/resource path)]
+                             (slurp url)))
+                         {:ns host-ns})}})
+
          ;; grease namespace — dispatch-main-async, get-addresses, ObjC class builder
         (let [ns-name 'com.phronemophobic.grease
               sci-ns  (sci/create-ns ns-name nil)]
@@ -230,7 +248,8 @@
                     'add-objc-method!     (sci/copy-var add-objc-method! sci-ns)
                     'objc-new             (sci/copy-var objc-new sci-ns)
                     'make-imp             (sci/copy-var make-imp sci-ns)
-                    'live-imps            (sci/copy-var live-imps sci-ns)}}))}
+                    'live-imps            (sci/copy-var live-imps sci-ns)
+                    'engine-load-error    (sci/copy-var engine-load-error sci-ns)}}))}
       addons/future))
 
 (def ^:private sci-ctx
@@ -253,19 +272,27 @@
         (sci/eval-string* ctx (slurp src)))
       (when-let [src (io/resource "grease/ios/camera.clj")]
         (sci/eval-string* ctx (slurp src)))
-      ;; Engine — data-driven API (dependency order: types first, api last)
-      (doseq [path ["grease/ios/types.clj"
-                    "grease/ios/naming.clj"
-                    "grease/ios/spec.clj"
-                    "grease/ios/registry.clj"
-                    "grease/ios/invoke.clj"
-                    "grease/ios/patterns.clj"
-                    "grease/ios/api.clj"]]
-        (when-let [src (io/resource path)]
-          (sci/eval-string* ctx (slurp src))))
-      ;; Initialise naming + types + registry in dependency order via the public API.
-      ;; This makes ios/call available immediately without a manual (api/load!).
-      (sci/eval-string* ctx "(grease.ios.api/load!)")
+      ;; Engine — data-driven API (dependency order: types first, api last).
+      ;; Wrapped in try-catch so that a load error is logged but does not
+      ;; prevent the nREPL from starting.
+      (try
+        (doseq [path ["grease/ios/types.clj"
+                      "grease/ios/naming.clj"
+                      "grease/ios/spec.clj"
+                      "grease/ios/registry.clj"
+                      "grease/ios/patterns.clj"
+                      "grease/ios/invoke.clj"
+                      "grease/ios/api.clj"]]
+          (if-let [src (io/resource path)]
+            (sci/eval-string* ctx (slurp src))
+            (nlog (str "  [engine] WARNING: resource not found: " path))))
+        ;; Initialise naming + types + registry in dependency order via the public API.
+        ;; This makes ios/call available immediately without a manual (api/load!).
+        (sci/eval-string* ctx "(grease.ios.api/load!)")
+        (nlog "  [engine] API loaded — grease.ios.api/call is ready")
+        (catch Exception e
+          (reset! engine-load-error {:message (.getMessage e) :ex (str e)})
+          (nlog (str "  [engine] WARNING: engine preload failed: " (.getMessage e)))))
       ctx)))
 
 ;; =============================================================================

@@ -87,4 +87,9 @@
   "grease/api-specs/XPC.edn"
   "grease/api-specs/SystemConfiguration.edn"
   "grease/api-specs/MetalPerformanceShaders.edn"
-  "grease/api-specs/os.edn"]}
+  "grease/api-specs/os.edn"
+  "grease/api-specs/QuartzCore.edn"
+  "grease/api-specs/CryptoKit.edn"
+  "grease/api-specs/Combine.edn"
+  "grease/api-specs/CloudKit.edn"
+  "grease/api-specs/SwiftData.edn"]}

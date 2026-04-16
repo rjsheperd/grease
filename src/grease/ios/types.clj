@@ -13,7 +13,7 @@
     (types/encoding-for \"NSString\")            ;; -> \"@\"
     (types/register-class! \"AVPlayer\")         ;; -> adds opaque pointer entry"
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]))
+            [grease.ios-host :as host]))
 
 ;; =============================================================================
 ;; BOOL helpers (no native deps — referenced from types.edn)
@@ -56,10 +56,10 @@
 (defn- load-types-edn
   "Reads types.edn from the classpath resource and resolves coercers."
   []
-  (let [res (io/resource "grease/types.edn")]
-    (when-not res
+  (let [content (host/read-resource "grease/types.edn")]
+    (when-not content
       (throw (ex-info "Cannot find grease/types.edn on classpath" {})))
-    (into {} (map load-entry (edn/read-string {:readers {}} (slurp res))))))
+    (into {} (map load-entry (edn/read-string {:readers {}} content)))))
 
 ;; Lazily resolved reference to grease.ios.foundation/null-ptr.
 ;; Deferred until first use so load order between types and foundation is flexible.

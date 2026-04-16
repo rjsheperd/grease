@@ -15,8 +15,8 @@
     (naming/->clj :enum-val \"readyToPlay\")        ;; -> :ready-to-play
     (naming/->objc :method \"start-running\")       ;; -> \"startRunning\""
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [grease.ios-host :as host]))
 
 ;; =============================================================================
 ;; Selector flattening — colons become dashes
@@ -123,10 +123,10 @@
 (defn init!
   "Loads naming.edn and compiles rules.  Call once at startup."
   []
-  (let [res (io/resource "grease/naming.edn")]
-    (when-not res
+  (let [content (host/read-resource "grease/naming.edn")]
+    (when-not content
       (throw (ex-info "Cannot find grease/naming.edn on classpath" {})))
-    (let [{:keys [rules]} (edn/read-string (slurp res))]
+    (let [{:keys [rules]} (edn/read-string content)]
       (reset! rules-atom (mapv compile-rule rules)))))
 
 ;; =============================================================================

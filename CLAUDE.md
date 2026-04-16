@@ -27,9 +27,14 @@ pkill -f ios-deploy 2>/dev/null
 ./scripts/debug-demo-app --noinstall
 ```
 
-Subsequent builds can skip `rm -rf ...` and use the CAPCache:
+**Always do a full clean build when any source or resource file changes.**
+The CAP cache freezes the entire native-image state (compiled classes, SCI
+context, embedded resources) at the time the cache was created. Subsequent
+`USE_CAP_CACHE=use` builds serve the old cached state — `.clj` changes are
+not re-evaluated, `.edn` changes are not re-embedded. Only use the CAP cache
+when you genuinely made zero file changes (e.g. retrying a failed link step).
 ```bash
-USE_CAP_CACHE=use ./scripts/build-bb-o
+USE_CAP_CACHE=use ./scripts/build-bb-o  # ONLY when no files changed
 ```
 
 ## nREPL connection
@@ -85,6 +90,22 @@ Full working example: `dev/test_location.clj`.
   build time. SCI's gensym counter restarts between backtick levels in the
   frozen image, causing `cls__30__auto__` unresolved-symbol errors. Use
   `mapv` to compute forms outside the outer backtick instead.
+
+- **Java reflection in frozen SCI**: Only classes listed in
+  `conf/reflectionconfig-arm64-ios.json` can be called via reflection.
+  `java.lang.Math`, `java.util.Scanner`, and most JDK classes are NOT present.
+  Replace any `Math/abs`, `Math/floor`, etc. with pure Clojure equivalents
+  (`bit-and`, `max`, etc.).
+
+- **EDN resources in native image**: Classpath resources must be listed in
+  `conf/resourceconfig-arm64-ios.json` to be accessible at runtime. The config
+  already includes `.clj` and `.edn` patterns. Adding a new resource format
+  requires a full clean build (the CAP cache embeds resource patterns).
+
+- **`clojure.java.io` in SCI engine files**: SCI does not expose
+  `clojure.java.io`. Engine files that need to read classpath resources must
+  use `grease.ios-host/read-resource` instead (exposed in SCI opts in
+  `grease.clj`). This wraps `io/resource` + `slurp` on the JVM side.
 
 - **ARC retention**: ObjC objects are released unless held by a Clojure
   atom. Always store delegates AND managers in atoms.

@@ -19,6 +19,7 @@
     {"pattern": ".*\\.obj$"},
     {"pattern": ".*\\.mtl$"},
     {"pattern": ".*\\.js$"},
-    {"pattern": ".*\\.clj$"}
+    {"pattern": ".*\\.clj$"},
+    {"pattern": ".*\\.edn$"}
   ]
 }

@@ -213,7 +213,7 @@ Cover all public functions in ~grease.ios.foundation~:
 Note: Foundation.edn was fully written in Phase 0.4 as part of the spec loader work.
 All 10 functions/method groups are covered. NSURL and NSNumber extras included.
 
-** TODO 1.2 On-device validation via REPL
+** DONE 1.2 On-device validation via REPL
 
 The engine namespaces (~grease.ios.types~, ~naming~, ~spec~, ~registry~,
 ~invoke~, ~patterns~, ~api~) pass all JVM tests but are never added to the
@@ -268,10 +268,12 @@ Plain encoding-map lookups, ~mapcat~, calls ~objc/msg-send~,
 ~patterns/wrap-arg~, ~types/coerce-in/out~.  No ~requiring-resolve~.
 No issues.
 
-**** ~grease.ios.patterns~ — SAFE (one Java interop to note)
+**** ~grease.ios.patterns~ — BLOCK (Math/abs in frozen native image)
 
 ~defmulti~ / ~defmethod~ — SCI supports both.  ~defonce~ — fine.
-~(Math/abs (int (hash ...)))~ — SCI exposes ~Math/abs~; not a concern.
+~(Math/abs (int (hash ...)))~ — FAILS in frozen native image: ~java.lang.Math~
+is not in ~conf/reflectionconfig-arm64-ios.json~.  SCI cannot call it via
+reflection.  Fix: replace with ~(bit-and (hash ...) 0x7fffffff)~.
 
 **** ~grease.ios.api~ — SAFE (indirect dependency on types fix)
 
@@ -288,7 +290,7 @@ Calls ~types/init!~, so it inherits the block from types — but once
 | ~grease.ios.spec~      | SAFE   | Sanity-check ~slurp~ on URL post-deploy |
 | ~grease.ios.registry~  | SAFE   | None                       |
 | ~grease.ios.invoke~    | SAFE   | None                       |
-| ~grease.ios.patterns~  | SAFE   | None                       |
+| ~grease.ios.patterns~  | BLOCK  | Fix ~Math/abs~ → ~bit-and~ (→ 1.2.2) |
 | ~grease.ios.api~       | SAFE   | Depends on types fix       |
 
 *** DONE 1.2.2 Fix ~requiring-resolve~ in ~grease.ios.types~
@@ -369,7 +371,7 @@ Clojure integration test (follows ~tests/test_runner.clj~ pattern) covering:
 
 Gate: all 5 assertions pass via ~clj -M tests/test_engine.clj~.
 
-*** TODO 1.2.6 Rebuild, deploy, and run test
+*** DONE 1.2.6 Rebuild, deploy, and run test
 
 #+begin_src bash
 USE_CAP_CACHE=use ./scripts/build-bb-o

@@ -111,7 +111,7 @@
       cached
       (let [proto-spec (registry/protocol-spec protocol-name)
             proto-methods (if proto-spec (:methods proto-spec) [])
-            class-name  (str "GrseDelegate" (Math/abs (int (hash delegate-map))))
+            class-name  (str "GrseDelegate" (bit-and (hash delegate-map) 0x7fffffff))
             sel-enc-fns (keep (fn [[kw f]]
                                 (when-let [sel (clj-name->selector kw proto-methods)]
                                   (let [m (some #(when (= (:selector %) sel) %) proto-methods)]
