@@ -32,6 +32,7 @@
             [grease.ios.structs :as structs]
             [grease.ios.types :as types]
             [tech.v3.datatype.ffi :as dt-ffi]
+            [tech.v3.datatype.native-buffer :as native-buffer]
             [tech.v3.datatype.struct :as dt-struct]))
 
 ;; =============================================================================
@@ -154,22 +155,24 @@
   as a struct-valued argument in [[ffi/call-ptr]].
 
   Uses [[structs/pack]] (ByteBuffer) as the layout source of truth, then
-  copies the bytes into a direct (off-heap) ByteBuffer and wraps it with
+  copies the bytes into a dtype native-heap buffer and wraps it with
   [[dt-struct/inplace-new-struct]].  [[ensure-ffi-struct!]] must be called
   for struct-name before this function.
 
-  Uses java.nio.ByteBuffer/allocateDirect instead of dtype/make-container to
-  avoid requiring tech.v3.datatype (not in the SCI namespace registry)."
+  Uses [[native-buffer/malloc]] rather than
+  [[java.nio.ByteBuffer/allocateDirect]] because dtype's [[ffi/call-ptr]]
+  calls [[tech.v3.datatype.protocols/PToNativeBuffer]] on struct args to
+  obtain the raw memory address.  A bare DirectByteBuffer does not implement
+  that protocol; a dtype NativeBuffer does."
   [struct-name m]
   (let [bb   (structs/pack struct-name m)
         size (:size (structs/struct-for struct-name))
-        arr  (byte-array size)]
+        arr  (byte-array size)
+        nbuf (native-buffer/malloc size {:resource-type :gc})]
     (.position bb 0)
     (.get bb arr)
-    (let [direct (java.nio.ByteBuffer/allocateDirect size)]
-      (.put direct arr)
-      (.rewind direct)
-      (dt-struct/inplace-new-struct (keyword struct-name) direct))))
+    (.put (native-buffer/native-buffer->nio-buf nbuf) arr)
+    (dt-struct/inplace-new-struct (keyword struct-name) nbuf)))
 
 ;; =============================================================================
 ;; Auto-coercion for id-typed arguments
