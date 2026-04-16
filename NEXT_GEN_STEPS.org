@@ -834,15 +834,17 @@ instead of an opaque pointer.
 ~known-struct?~, ~pack~ (map → ByteBuffer), ~unpack~ (ByteBuffer → map).
 Nested struct fields supported recursively.  8 gate tests pass (28 assertions).
 
-*** TODO 10.2.2 Wire ~structs/pack~ into ~types/coerce-in~
+*** DONE 10.2.2 Wire ~structs/pack~ into ~types/coerce-in~
 
-Register struct types in the type-table via ~(types/register-struct! "CGRect")~
-so ~(types/coerce-in "CGRect" {:origin ...})~ calls ~structs/pack~.
+Added ~types/register-struct! [struct-name]~ to ~types.clj~.  Registers the struct
+in the type table with encoding ~{TypeName}~, ~:coerce-in-fn~ = ~structs/pack~.
+Also fixed ~types_test.clj~ fixture to always call ~(f)~ so non-native tests run.
+4 new gate tests pass; 186 total tests, 798 assertions, 0 failures.
 
-*** TODO 10.2.3 Wire ~structs/unpack~ into ~types/coerce-out~
+*** DONE 10.2.3 Wire ~structs/unpack~ into ~types/coerce-out~
 
-Register struct types so ~(types/coerce-out "CGRect" buf)~ calls ~structs/unpack~.
-Handle both ByteBuffer (already extracted) and raw pointer (read memory) cases.
+~register-struct!~ also sets ~:coerce-out-fn~: ByteBuffer → ~structs/unpack~;
+Clojure map → identity; other values → identity (graceful).
 
 *** TODO 10.2.4 Update ~invoke/dispatch!~ for struct returns
 

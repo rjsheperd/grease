@@ -13,7 +13,8 @@
     (types/encoding-for \"NSString\")            ;; -> \"@\"
     (types/register-class! \"AVPlayer\")         ;; -> adds opaque pointer entry"
   (:require [clojure.edn :as edn]
-            [grease.ios-host :as host]))
+            [grease.ios-host :as host]
+            [grease.ios.structs :as structs]))
 
 ;; =============================================================================
 ;; BOOL helpers (no native deps — referenced from types.edn)
@@ -92,6 +93,26 @@
           :coerce-out    'clojure.core/identity
           :coerce-in-fn  identity
           :coerce-out-fn identity}))
+
+(defn register-struct!
+  "Registers struct-name as a value type backed by [[grease.ios.structs]].
+
+  coerce-in:  Clojure map → ByteBuffer (via [[structs/pack]]).
+  coerce-out: ByteBuffer or raw value → Clojure map (via [[structs/unpack]]).
+              If the value is already a Clojure map, returns it unchanged.
+
+  [[structs/init!]] must be called before [[register-struct!]]."
+  [struct-name]
+  (swap! type-table assoc struct-name
+         {:encoding      (str "{" struct-name "}")
+          :clj           :struct
+          :coerce-in-fn  (fn [m] (structs/pack struct-name m))
+          :coerce-out-fn (fn [v]
+                           (cond
+                             (map? v) v
+                             (instance? java.nio.ByteBuffer v)
+                             (structs/unpack struct-name v)
+                             :else v))}))
 
 (defn encoding-for
   "Returns the single-char ObjC type encoding string for type-name,

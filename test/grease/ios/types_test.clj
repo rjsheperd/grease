@@ -12,6 +12,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [grease.ios.structs :as structs]
             [grease.ios.types :as types]))
 
 ;; =============================================================================
@@ -22,16 +23,16 @@
   ;; init! loads types.edn and resolves coercers.
   ;; On macOS dev machine with GraalVM JDK, this resolves foundation/* symbols.
   ;; On plain JVM without native deps, only pure-Clojure symbols resolve.
-  ;; We guard each test accordingly.
+  ;; We always call (f) so that structure tests and pure-Clojure tests run
+  ;; even when native deps are unavailable.  Tests that need coercers guard
+  ;; themselves with (types/known-type? ...).
   (try
     (types/init!)
-    (f)
     (catch Exception e
-      ;; If init! fails (missing native deps), skip live coercer tests.
-      ;; Structure tests still run against the raw EDN.
       (println "NOTE: types/init! failed (native deps unavailable) —"
-               "only structure tests will run.")
-      (println "Cause:" (.getMessage e)))))
+               "only structure and struct tests will run.")
+      (println "Cause:" (.getMessage e))))
+  (f))
 
 (use-fixtures :once load-types-fixture)
 
@@ -131,3 +132,39 @@
     (when (types/known-type? "BOOL")
       (is (= true  (types/coerce-out "BOOL" 1)))
       (is (= false (types/coerce-out "BOOL" 0))))))
+
+;; =============================================================================
+;; Phase 10.2 — register-struct! wires pack/unpack into the type table
+;; =============================================================================
+
+(deftest register-struct-test
+  (testing "register-struct! adds CGPoint to type table with struct encoding"
+    (structs/init!)
+    (types/register-struct! "CGPoint")
+    (is (types/known-type? "CGPoint"))
+    (is (= "{CGPoint}" (types/encoding-for "CGPoint")))))
+
+(deftest coerce-in-struct-test
+  (testing "coerce-in for registered struct calls structs/pack"
+    (structs/init!)
+    (types/register-struct! "CGSize")
+    (let [buf (types/coerce-in "CGSize" {:width 100.0 :height 50.0})]
+      (is (instance? java.nio.ByteBuffer buf))
+      (is (= 16 (.capacity buf))))))
+
+(deftest coerce-out-struct-bytebuffer-test
+  (testing "coerce-out for registered struct unpacks ByteBuffer to map"
+    (structs/init!)
+    (types/register-struct! "CGPoint")
+    (let [buf (structs/pack "CGPoint" {:x 1.0 :y 2.0})
+          out (types/coerce-out "CGPoint" buf)]
+      (is (map? out))
+      (is (< (Math/abs (- 1.0 (double (:x out)))) 1e-9))
+      (is (< (Math/abs (- 2.0 (double (:y out)))) 1e-9)))))
+
+(deftest coerce-out-struct-map-passthrough-test
+  (testing "coerce-out for registered struct passes through Clojure maps unchanged"
+    (structs/init!)
+    (types/register-struct! "CGPoint")
+    (let [m {:x 5.0 :y 6.0}]
+      (is (= m (types/coerce-out "CGPoint" m))))))
