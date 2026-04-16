@@ -82,3 +82,12 @@
   @dispatch-error)
 
 (println "[test-location] loaded — call (dev.test-location/start-location-updates!) to begin")
+
+(comment
+
+  (dev.test-location/start-location-updates!)
+
+  @last-location
+
+
+  )

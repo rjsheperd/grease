@@ -20,6 +20,8 @@ xcuserdata
 
 build/
 .cache/
+*.o
+__.SYMDEF*
 
 # user-specific XCode stuff
 xcuserdata
