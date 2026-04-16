@@ -98,6 +98,15 @@
      (objc-rt/msg-send :void info-vc "setTabBarItem:" :pointer (make-tab-item! "Info" 1))
      (objc-rt/msg-send :void tab-bar "setViewControllers:animated:"
                        :pointer vcs :int8 0)
+     (let [white (objc-rt/msg-send :pointer (get-class "UIColor") "whiteColor")
+           app   (objc-rt/msg-send :pointer
+                                   (objc-rt/msg-send :pointer (get-class "UITabBarAppearance") "alloc")
+                                   "init")
+           bar   (objc-rt/msg-send :pointer tab-bar "tabBar")]
+       (objc-rt/msg-send :void app "configureWithOpaqueBackground")
+       (objc-rt/msg-send :void app "setBackgroundColor:" :pointer white)
+       (objc-rt/msg-send :void bar "setStandardAppearance:"  :pointer app)
+       (objc-rt/msg-send :void bar "setScrollEdgeAppearance:" :pointer app))
      (let [hook   (objc-rt/msg-send :pointer (get-class "GreaseHook") "shared")
            window (objc-rt/msg-send :pointer hook "window")]
        (objc-rt/msg-send :void window "setRootViewController:" :pointer tab-bar))
