@@ -223,8 +223,9 @@
         (scify/ns->ns-map 'com.phronemophobic.clj-libffi)
         (scify/ns->ns-map 'com.phronemophobic.clj-libffi.callback)
 
-         ;; dtype FFI helpers
+         ;; dtype FFI + struct helpers
         (scify/ns->ns-map 'tech.v3.datatype.ffi)
+        (scify/ns->ns-map 'tech.v3.datatype.struct)
 
          ;; grease.ios-host — JVM-side I/O helpers for engine namespace loading.
          ;; read-resource loads a classpath resource and returns its content as a
