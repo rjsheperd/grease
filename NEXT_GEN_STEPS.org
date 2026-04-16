@@ -697,56 +697,40 @@ the stub provides ~read-resource~ via ~clojure.java.io/resource~ so all JVM
 tests that require ~grease.ios.types~, ~grease.ios.naming~, and
 ~grease.ios.spec~ can load.)
 
-** TODO 8.2 Wire auto-coercion into ~grease.ios.invoke/dispatch!~
+** DONE 8.2 Wire auto-coercion into ~grease.ios.invoke/dispatch!~
 
 Extend ~invoke/dispatch!~ so that when a method arg has ~:type "id"~ and the caller
-passes a Clojure value (not a pointer), ~coerce/->ns-object~ is applied automatically.
+passes a Clojure value (not a pointer), auto-coercion is applied automatically.
 
-#+begin_src clojure
-;; In invoke/dispatch! arg-coercion step (currently line 81-84):
-(let [coerced (cond
-                (:pattern spec) (patterns/wrap-arg spec val)
-                ;; NEW: auto-box plain Clojure values for id-typed args
-                (and (= "id" (:type spec "id"))
-                     (not (pointer? val)))
-                (coerce/->ns-object val)
-                :else
-                (types/coerce-in (:type spec "id") val))]
-  ...)
-#+end_src
+Implementation: added ~coerce-id-arg~ private fn to ~grease.ios.invoke~ (String →
+NSString, Long/Integer → NSNumber-long, Double/Float → NSNumber-double, all other values
+fall through to ~types/coerce-in "id"~). The coercion runs before encoding dispatch so
+mock bridge sentinel maps pass through unchanged (only primitive Clojure types are
+auto-boxed).
 
 Before: ~(ios/call label :set-text (f/->nsstring "hello"))~
 After:  ~(ios/call label :set-text "hello")~
 
-Gate: existing invoke tests unchanged; new test verifies string arg auto-boxed.
+Gate: all 16 invoke tests pass; new ~dispatch-auto-coerce-string-arg-test~ verifies
+string auto-boxing via real NSMutableArray addObject: / count round-trip.
 
-*** TODO 8.2.1 Add ~pointer?~ predicate to ~grease.ios.types~
+Note: objectAtIndex: (NSUInteger arg = :uint64) cannot be used for round-trip on macOS
+JVM because the FFI's make_ptr does not support :uint64 args; count (NSUInteger return,
+no args) is used instead.
 
-Add a ~(defn pointer? [v])~ that returns true when ~v~ is a native ffi.Pointer
-or a raw ObjC class/instance map. This is needed so dispatch! can distinguish
-"already a pointer" from "Clojure value that needs boxing".
+*** DONE 8.2.1 Add ~pointer?~ predicate to ~grease.ios.types~
 
-#+begin_src clojure
-;; In types.clj
-(defn pointer?
-  "Returns true if v is an ObjC pointer (tech.v3.datatype.ffi.Pointer)
-  or a structural pointer map from the mock bridge."
-  [v]
-  (or (instance? tech.v3.datatype.ffi.Pointer v)
-      (and (map? v) (contains? v :class-name))   ; mock sentinel
-      (nil? v)))                                  ; nil is a valid null pointer
-#+end_src
+Handled inline: ~coerce-id-arg~ only auto-boxes String/Long/Integer/Double/Float.
+Maps (mock sentinels) and all other values fall through to ~types/coerce-in "id"~.
 
-*** TODO 8.2.2 Extend ~invoke/dispatch!~ with auto-coerce branch
+*** DONE 8.2.2 Extend ~invoke/dispatch!~ with auto-coerce branch
 
-Edit the arg-coercion ~let~ binding in ~dispatch!~ and ~dispatch-class!~ to call
-~coerce/->ns-object~ when the arg type is ~"id"~ and the value isn't already a pointer.
-Add ~[grease.ios.coerce :as coerce]~ to invoke.clj requires.
+~dispatch!~ and ~dispatch-class-raw!~ both updated in ~src/grease/ios/invoke.clj~.
 
-*** TODO 8.2.3 Update ~invoke_test.clj~ with auto-coerce coverage
+*** DONE 8.2.3 Update ~invoke_test.clj~ with auto-coerce coverage
 
-Add one new test confirming that ~(api/call label :set-text "hello")~ (passing a plain
-string) reaches the device layer without an explicit ~->nsstring~ conversion.
+Added ~dispatch-auto-coerce-string-arg-test~: creates real NSMutableArray, calls
+~dispatch!~ with a plain String, verifies count == 1 (element was added).
 
 * Phase 9 — Generic Block Factory (objcjure-inspired)
 

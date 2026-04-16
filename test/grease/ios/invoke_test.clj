@@ -11,7 +11,7 @@
   Methods with object return types are tested with a hand-crafted method-spec
   that overrides :return to \"id\"."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [grease.ios.foundation]
+            [grease.ios.foundation :as foundation]
             [grease.ios.invoke :as invoke]
             [grease.ios.mock-bridge :as mock]
             [grease.ios.naming :as naming]
@@ -197,3 +197,24 @@
             (is (= :int64 (first args)))
             (is (= 42 (second args))))
           (is (= fake-num result)))))))
+
+;; =============================================================================
+;; Phase 8.2 — auto-coerce: String arg for id-typed addObject: (real ObjC call)
+;;
+;; Uses a real NSMutableArray on macOS JVM to verify that dispatch! auto-boxes
+;; a Clojure String to an NSString when the arg type is "id".
+;; No mock bridge — this makes actual ObjC calls via the macOS Foundation runtime.
+;; =============================================================================
+
+(deftest dispatch-auto-coerce-string-arg-test
+  (testing "dispatch! auto-boxes String arg via coerce-id-arg for id-typed args"
+    ;; Create a real NSMutableArray via foundation and dispatch addObject: "hello"
+    ;; without pre-boxing.  Verify via count (NSUInteger return, no :uint64 arg)
+    ;; that the element was added — objectAtIndex: takes NSUInteger (:uint64) which
+    ;; the macOS JVM FFI does not support as an argument type.
+    (let [arr-ptr (foundation/->nsarray [])
+          method  (registry/method-spec "NSMutableArray" "addObject:")
+          _       (invoke/dispatch! arr-ptr "addObject:" method ["hello"])
+          count-m (registry/method-spec "NSArray" "count")
+          cnt     (invoke/dispatch! arr-ptr "count" count-m [])]
+      (is (= 1 cnt)))))

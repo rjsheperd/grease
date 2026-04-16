@@ -14,6 +14,7 @@
     (invoke/dispatch! receiver \"play\" method-spec [])
     (invoke/dispatch-class! \"NSMutableArray\" \"array\" method-spec [])"
   (:require [com.phronemophobic.grease :as grease]
+            [grease.ios.foundation :as foundation]
             [grease.ios.objc :as objc]
             [grease.ios.patterns :as patterns]
             [grease.ios.types :as types]))
@@ -61,6 +62,30 @@
    :arg-types (arg-kws encoding)})
 
 ;; =============================================================================
+;; Auto-coercion for id-typed arguments
+;; =============================================================================
+
+(defn- coerce-id-arg
+  "Coerces a Clojure value to an ObjC pointer for ~id~-typed method arguments.
+
+  Only auto-boxes primitive Clojure types that are unambiguously NOT ObjC pointers:
+  - ~String~         → NSString via ~foundation/->nsstring~
+  - ~Long~ / ~Integer~ → NSNumber via ~foundation/->nsnumber-long~
+  - ~Double~ / ~Float~ → NSNumber via ~foundation/->nsnumber-double~
+
+  All other values (maps, vectors, nil, raw pointers, keywords) fall through to
+  the identity coercer in [[grease.ios.types/coerce-in]] for ~\"id\"~.  This
+  preserves backward compatibility — mock bridge sentinel maps and raw ffi pointers
+  are not touched."
+  [v]
+  (cond
+    (string? v)  (foundation/->nsstring v)
+    (integer? v) (foundation/->nsnumber-long v)
+    (float? v)   (foundation/->nsnumber-double (double v))
+    (number? v)  (foundation/->nsnumber-double v)   ; catches Double
+    :else        (types/coerce-in "id" v)))
+
+;; =============================================================================
 ;; Core dispatch
 ;; =============================================================================
 
@@ -80,7 +105,9 @@
         typed-args (mapcat (fn [spec kw val]
                              (let [coerced (if (:pattern spec)
                                              (patterns/wrap-arg spec val)
-                                             (types/coerce-in (:type spec "id") val))]
+                                             (if (= (:type spec "id") "id")
+                                               (coerce-id-arg val)
+                                               (types/coerce-in (:type spec "id") val)))]
                                [kw coerced]))
                            arg-specs arg-types arg-vals)
         raw-result (apply objc/msg-send ret receiver sel-str typed-args)
@@ -107,7 +134,9 @@
         typed-args (mapcat (fn [spec kw val]
                              (let [coerced (if (:pattern spec)
                                              (patterns/wrap-arg spec val)
-                                             (types/coerce-in (:type spec "id") val))]
+                                             (if (= (:type spec "id") "id")
+                                               (coerce-id-arg val)
+                                               (types/coerce-in (:type spec "id") val)))]
                                [kw coerced]))
                            arg-specs arg-types arg-vals)]
     (apply objc/msg-send ret cls sel-str typed-args)))
