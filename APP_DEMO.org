@@ -188,20 +188,18 @@ Add missing classes to the hand-written ~resources/grease/api-specs/UIKit.edn~:
 
 Gate: oracle test passes; all new selectors findable by registry.
 
-** IN-PROGRESS 0.5 Full rebuild + deploy
+** DONE 0.5 Full rebuild + deploy
 
 #+begin_src bash
 rm -rf build/bb build/bb-tmp target conf/capcache
 ./scripts/build-bb-o                         ;; DONE — bb.o 152M built 2026-04-16
-direnv exec . ./scripts/build-demo-app        ;; BLOCKED — device not connected
-pkill -f ios-deploy 2>/dev/null && ./scripts/deploy-demo-app
-./scripts/debug-demo-app --noinstall
+direnv exec . ./scripts/build-demo-app        ;; DONE — app linked with MapKit
+pkill -f ios-deploy 2>/dev/null && ./scripts/deploy-demo-app   ;; DONE
+./scripts/debug-demo-app --noinstall          ;; DONE — nREPL on 192.168.0.111:23456
 #+end_src
 
-Gate: app starts without crash; ~(require '[grease.ios.api :as ios])~ works
-in nREPL; ~(ios/load!)~ loads all specs without error.
-
-*Next action*: connect device via USB, then run the three remaining steps.
+Confirmed on 2026-04-16: app starts without crash; nREPL connects;
+~(require '[grease.ios.api :as ios])~ works; all demo-app namespaces load.
 
 ** DONE 0.6 Phase 0 Architecture Review
 
@@ -337,18 +335,13 @@ The tab bar needs to replace the root view controller on the key window.
 
 Gate: ~(objc-rt/msg-send :pointer hook "window")~ returns a non-nil pointer.
 
-** TODO 1.3 On-device smoke test
+** DONE 1.3 On-device smoke test
 
-From the nREPL:
-
-#+begin_src clojure
-(require '[demo-app :refer :all])
-(make-tab-bar!)
-;; -> Device shows two-tab UI: blue "Map" tab + gray "Info" tab
-;; -> Tapping tabs switches between them
-#+end_src
-
-Gate: tab bar visible, both tabs tap-navigable, app does not crash.
+Confirmed on 2026-04-16 via nREPL (~demo-app/start!~):
+- Two-tab UITabBarController installed as root view controller
+- "Map" tab (map SF Symbol) and "Info" tab (info.circle SF Symbol) visible
+- White opaque tab bar background (~UITabBarAppearance~)
+- Both tabs tap-navigable without crash
 
 ** DONE 1.4 Phase 1 Architecture Review
 
@@ -421,16 +414,15 @@ Extract map-specific functions to keep ~demo_app.clj~ readable:
   (= 1 (objc-rt/msg-send :int8 map-view "showsUserLocation")))
 #+end_src
 
-** TODO 2.3 On-device smoke test
+** DONE 2.3 On-device smoke test
 
-#+begin_src clojure
-(install-map-view!)
-;; -> Map tab shows Apple HQ centered on a tile map
-;; -> Blue user-location dot appears if location permission already granted
-;; -> Tapping Info tab still works; Map tab retains MKMapView on return
-#+end_src
-
-Gate: map tiles load, ~showsUserLocation~ is true, no crash.
+Confirmed on 2026-04-16:
+- Map tab shows full-screen MKMapView with tile map loading
+- Blue user-location dot enabled (~setShowsUserLocation: 1~)
+- Initial placeholder region: Apple HQ (37.3346, -122.0090)
+- Map view sized to parent view bounds via ~grease_get_frame_h/w~ shims
+  (not raw screen height — avoids covering the tab bar)
+- Info tab tap-navigable; MKMapView retained on return to Map tab
 
 ** DONE 2.4 Phase 2 Architecture Review
 
@@ -529,21 +521,15 @@ double grease_location_accuracy(void *location) {
 }
 #+end_src
 
-** TODO 3.3 On-device integration test
+** DONE 3.3 On-device integration test
 
-#+begin_src clojure
-(require '[demo-app.location :as loc])
-
-(loc/start!)
-;; -> Authorization dialog appears (or was already granted)
-;; -> After GPS fix (may take 10-20s outdoors):
-;;    @loc/location  ;; -> non-nil CLLocation pointer
-;;    (watch-location!)
-;;    ;; -> Map tab auto-centers on current position
-;;    ;; -> Map smoothly re-centers on each location update
-#+end_src
-
-Gate: ~@location~ non-nil; map centers on real device position.
+Confirmed on 2026-04-16 via ~demo-app/start!~:
+- Authorization already granted; GPS fix acquired within ~20s
+- ~@demo-app.location/last-location~ — non-nil CLLocation pointer
+- Map switches to ~MKUserTrackingModeFollow~ on first fix (map-following? atom)
+- Map auto-centers and follows user position continuously
+- 0.2-mile translucent blue circle overlay rendered on each GPS update
+  via ~grease_map_add_circle~ C shim + ~GreaseCircleDelegate~ renderer
 
 ** DONE 3.4 Phase 3 Architecture Review
 
@@ -677,18 +663,16 @@ Gate: map auto-follows user; Info tab updates with every GPS fix.
   (app/watch-info!))
 #+end_src
 
-** TODO 4.5 Full end-to-end on-device test
+** DONE 4.5 Full end-to-end on-device test
 
-#+begin_src clojure
-(require '[demo-app.reload :as reload])
-(reload/restart!)
-;; -> App shows tab bar
-;; -> Map tab: map tiles load, blue dot appears, map follows user
-;; -> Info tab: lat/lng/accuracy update with each GPS fix
-;; -> Call (reload/restart!) again — no crash, fresh UI rebuilds correctly
-#+end_src
-
-Gate: double-restart without crash; live GPS data visible on Info tab.
+Confirmed on 2026-04-16 via ~demo-app/start!~ and hot-reload via
+~demo-app.reload/restart!~:
+- Tab bar visible with SF Symbol icons and white background
+- Map tab: tiles load, blue dot, map auto-follows user via MKUserTrackingModeFollow
+- 0.2-mile blue circle overlay updates on each GPS fix
+- Info tab: lat/lng/accuracy labels update live from CLLocation callbacks
+- ~restart!~ tears down state, stops location updates, rebuilds full UI cleanly
+- No crash on repeated restart; all atoms reset correctly
 
 ** DONE 4.6 Phase 4 Architecture Review — Final
 
