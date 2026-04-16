@@ -1,0 +1,9 @@
+[{:name        "Hello World"
+  :description "Sets the status bar message — quick smoke-test"
+  :file        "apps/hello.clj"}
+ {:name        "Live Clock"
+  :description "Full-screen digital clock, updates every second"
+  :file        "apps/clock.clj"}
+ {:name        "Colour Pad"
+  :description "Tap anywhere to cycle through background colours"
+  :file        "apps/colours.clj"}]

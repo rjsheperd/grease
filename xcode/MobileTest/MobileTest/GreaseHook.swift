@@ -39,6 +39,12 @@ import UIKit
         return UIApplication.shared.windows.first
     }
 
+    // MARK: - App loader state
+
+    /// The URL of the last .clj file loaded via the grease:// URL scheme, or nil if
+    /// no app has been loaded yet.  ContentView polls this every 0.5 s.
+    @objc var loadedAppURL: String? = nil
+
     // MARK: - REPL-driven display message
 
     /// The last message set by a Clojure nREPL session.

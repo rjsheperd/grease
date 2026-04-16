@@ -301,6 +301,17 @@
         (catch Exception e
           (reset! engine-load-error {:message (.getMessage e) :ex (str e)})
           (nlog (str "  [engine] WARNING: engine preload failed: " (.getMessage e)))))
+      ;; Override clojure.core/load-file to support http/https URLs in addition to
+      ;; classpath resources. The fetch runs on the JVM side (not SCI), so full
+      ;; java.net networking is available. From the nREPL:
+      ;;   (load-file "https://example.com/my-app.clj")
+      ;;   (load-file "grease/ios/my-helper.clj")  ; classpath fallback
+      (sci/intern ctx 'clojure.core 'load-file
+                  (fn [path]
+                    (let [source (if (re-matches #"https?://.*" path)
+                                   (slurp (java.net.URL. path))
+                                   (some-> (io/resource path) slurp))]
+                      (some->> source (sci/eval-string* ctx)))))
       ctx)))
 
 ;; =============================================================================

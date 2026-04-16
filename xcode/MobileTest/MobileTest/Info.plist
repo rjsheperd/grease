@@ -37,6 +37,17 @@
 			</array>
 		</dict>
 	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>grease</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>com.grease.app-loader</string>
+		</dict>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Used for Clojure nREPL location experiments.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>

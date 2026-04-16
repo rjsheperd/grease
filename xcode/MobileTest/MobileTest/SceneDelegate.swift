@@ -28,6 +28,56 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             self.window = window
             window.makeKeyAndVisible()
         }
+
+        // Handle grease:// URLs that launched the app from a cold start.
+        if !connectionOptions.urlContexts.isEmpty {
+            handleURLContexts(connectionOptions.urlContexts)
+        }
+    }
+
+    // Handle grease://load?url=<encoded-url> deep links.
+    // iOS calls this when the app is already running and a grease:// URL is opened.
+    // For cold-start opens, connectionOptions.urlContexts is non-empty and is
+    // handled by the same helper below.
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        handleURLContexts(URLContexts)
+    }
+
+    private func handleURLContexts(_ contexts: Set<UIOpenURLContext>) {
+        guard let url = contexts.first?.url,
+              url.scheme == "grease",
+              url.host == "load",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let rawTarget = components.queryItems?.first(where: { $0.name == "url" })?.value,
+              let targetURL = URL(string: rawTarget) else { return }
+
+        GreaseHook.shared.loadedAppURL = nil
+        GreaseHook.shared.message = "Loading \(targetURL.lastPathComponent)…"
+
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: targetURL)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200 else {
+                    GreaseHook.shared.message = "Load failed: HTTP \(status)"
+                    return
+                }
+                guard let source = String(data: data, encoding: .utf8) else {
+                    GreaseHook.shared.message = "Load failed: response is not UTF-8"
+                    return
+                }
+                GreaseHook.shared.loadedAppURL = targetURL.absoluteString
+                GreaseHook.shared.message = "Running \(targetURL.lastPathComponent)…"
+                // call_eval is synchronous; dispatch to a background queue so we
+                // do not block the Swift concurrency thread pool for large evals.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    _ = call_eval(source)
+                    GreaseHook.shared.message = "Loaded: \(targetURL.lastPathComponent)"
+                }
+            } catch {
+                GreaseHook.shared.message = "Load failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {

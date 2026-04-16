@@ -40,6 +40,7 @@ struct ContentView: View {
     @State private var nreplPort: Int = 0
     @State private var logLines: [String] = []
     @State private var greaseMessage: String = GreaseHook.shared.message
+    @State private var loadedAppURL: String? = nil
 
     private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
@@ -101,6 +102,20 @@ struct ContentView: View {
                         .font(.system(.body, design: .monospaced))
                         .fontWeight(.semibold)
                         .foregroundColor(.cyan)
+                }
+
+                if let appURL = loadedAppURL {
+                    HStack(spacing: 6) {
+                        Text("App")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(appURL)
+                            .font(.system(.body, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundColor(.yellow)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
             }
             .padding()
@@ -168,6 +183,9 @@ struct ContentView: View {
 
         let msg = GreaseHook.shared.message
         if msg != greaseMessage { greaseMessage = msg }
+
+        let appURL = GreaseHook.shared.loadedAppURL
+        if appURL != loadedAppURL { loadedAppURL = appURL }
 
         guard let ptr = bridge_get_logs() else { return }
         let raw = String(cString: ptr)
