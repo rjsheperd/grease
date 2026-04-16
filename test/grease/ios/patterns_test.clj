@@ -152,11 +152,12 @@
       (is (= "Double" (:return m)))
       (is (= "d@:" (:encoding m))))))
 
-(deftest ^:parallel cllocation-coordinate-unsupported-test
-  (testing "CLLocation coordinate is marked :unsupported"
+(deftest ^:parallel cllocation-coordinate-struct-return-test
+  (testing "CLLocation coordinate returns CLLocationCoordinate2D (struct return, not :unsupported)"
     (let [m (registry/method-spec "CLLocation" "coordinate")]
       (is (some? m))
-      (is (true? (:unsupported m))))))
+      (is (= "CLLocationCoordinate2D" (:return m)))
+      (is (nil? (:unsupported m))))))
 
 ;; =============================================================================
 ;; Phase 2.2 — full delegate wiring integration (JVM mock)

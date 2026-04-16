@@ -56,6 +56,11 @@
   [type-name]
   (contains? @struct-registry type-name))
 
+(defn struct-names
+  "Returns the set of all known struct names.  Call [[init!]] first."
+  []
+  (set (keys @struct-registry)))
+
 ;; =============================================================================
 ;; Primitive field I/O
 ;; =============================================================================

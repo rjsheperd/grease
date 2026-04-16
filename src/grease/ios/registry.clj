@@ -13,7 +13,8 @@
     (registry/release! :my-delegate)"
   (:require [clojure.string :as str]
             [grease.ios.naming :as naming]
-            [grease.ios.spec :as spec]))
+            [grease.ios.spec :as spec]
+            [grease.ios.types :as types]))
 
 ;; =============================================================================
 ;; State atoms
@@ -46,7 +47,8 @@
         fw-key    (framework-keyword (:framework spec))]
     (swap! spec-registry assoc fw-key annotated)
     (doseq [cls (:classes annotated)]
-      (swap! class-index assoc (:name cls) cls))))
+      (swap! class-index assoc (:name cls) cls)
+      (types/register-class! (:name cls)))))
 
 ;; =============================================================================
 ;; Init

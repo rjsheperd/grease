@@ -94,11 +94,11 @@
         (when (and (not (get prim->dtype type)) (structs/known-struct? type))
           (ensure-ffi-struct! type)))
       (dt-struct/define-datatype!
-       (keyword struct-name)
-       (mapv (fn [{:keys [name type]}]
-               {:name     (keyword name)
-                :datatype (or (get prim->dtype type) (keyword type))})
-             (:fields spec))))))
+        (keyword struct-name)
+        (mapv (fn [{:keys [name type]}]
+                {:name     (keyword name)
+                 :datatype (or (get prim->dtype type) (keyword type))})
+              (:fields spec))))))
 
 (def ^:private msg-send-fptr
   "Lazy reference to objc_msgSend function pointer.

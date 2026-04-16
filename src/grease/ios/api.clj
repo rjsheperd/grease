@@ -76,7 +76,9 @@
   (structs/init!)
   (naming/init!)
   (types/init!)
-  (registry/load-all!))
+  (registry/load-all!)
+  (doseq [sname (structs/struct-names)]
+    (types/register-struct! sname)))
 
 (defn reload!
   "Reloads all specs from disk.  Naming and type rules are also re-initialised."
