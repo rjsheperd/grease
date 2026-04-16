@@ -543,36 +543,34 @@ double grease_location_accuracy(void *location) {
 
 Gate: ~@location~ non-nil; map centers on real device position.
 
-** TODO 3.4 Phase 3 Architecture Review
+** DONE 3.4 Phase 3 Architecture Review
 
-1. *~coordinate~ struct return*: the current approach reads lat/lng via C
-   shims (~grease_location_latitude~, ~grease_location_longitude~).  Now that
-   Phase 10.2.4 landed ~invoke/dispatch!~ struct-return support, evaluate
-   whether ~(ios/call loc :coordinate)~ returns a ~{:latitude ... :longitude ...}~
-   map directly.  If it does, remove the C shims and use the map.
+Findings (code analysis; on-device confirmation deferred to 3.3):
 
-2. *~on-location-update~ coupling*: the callback takes a raw ~CLLocation~
-   pointer.  Consider whether ~@location~ should store the raw pointer or a
-   Clojure map ~{:lat ... :lng ... :accuracy ... :timestamp ...}~.
-   Pros of Clojure map: info tab (Phase 4) has nothing to coerce.
-   Cons: loses the pointer (needed for CoreLocation distance calculations).
-   Decision: store both — ~{:ptr loc :lat ... :lng ... :accuracy ...}~.
+1. *~coordinate~ struct return*: C shims (~grease_location_latitude~,
+   ~grease_location_longitude~, ~grease_location_accuracy~) are still required.
+   ~ios/call :coordinate~ would return a ~CLLocationCoordinate2D~ struct — no
+   struct-return path is wired in the engine yet.  Shims stay for now.
 
-3. *Atom namespace split*: ~location~ and ~location-mgr~ are in
-   ~demo-app.location~; the map watch is in ~demo-app~ (root ns).  Is this
-   the right split?  Consider whether the watch should also live in
-   ~demo-app.location~ to keep all location-reaction logic in one namespace.
+2. *Callback pattern instead of ~add-watch~*: the actual implementation
+   diverged from the plan sketch.  ~demo-app.location/start!~ accepts an
+   ~on-location-fn~ parameter instead of writing to a global watch.
+   ~demo-app/on-location~ wires the callback in ~demo-app/start!~.  This is
+   cleaner: no watcher key collisions, no ~remove-watch~ needed on restart,
+   no coupling between ~demo-app.location~ and ~demo-app~.
 
-4. *~add-watch~ key collision*: ~:map-follow~ is a bare keyword.  If
-   ~watch-location!~ is called twice, the old watch is silently replaced.
-   Add a guard: ~(when-not (get (.-watches @location) :map-follow) ...)~
-   or remove-watch before add-watch.
+3. *~@last-location~ stores raw pointer*: the atom holds the raw ~CLLocation~
+   pointer (not a Clojure map).  Callers that need scalar values use the C
+   shims.  Acceptable for demo scope; if distance calculations were needed,
+   keeping the raw pointer is the right call.
 
-5. *Heading / tracking mode*: ~setUserTrackingMode:animated:~ with
-   ~MKUserTrackingModeFollow~ (1) would auto-center the map natively without
-   the atom watch.  Note this as a potential simplification: if we set the
-   tracking mode, the ~add-watch~ + ~set-map-region!~ cycle is redundant.
-   Defer to Phase 4 polish.
+4. *~add-watch~ pattern not used*: the ~:map-follow~ / key-collision concern
+   does not apply.  The callback pattern from item 2 supersedes it.
+
+5. *MKUserTrackingModeFollow already applied*: ~enable-map-follow!~ calls
+   ~setUserTrackingMode:animated: 1 1~ on first GPS fix.  No ~add-watch~ +
+   ~set-map-region!~ cycle exists in the codebase.  Phase 4.3 was implemented
+   from the start.
 
 * Phase 4 — Info Tab + Polish
 
@@ -690,61 +688,73 @@ Gate: map auto-follows user; Info tab updates with every GPS fix.
 
 Gate: double-restart without crash; live GPS data visible on Info tab.
 
-** TODO 4.6 Phase 4 Architecture Review — Final
+** DONE 4.6 Phase 4 Architecture Review — Final
 
-This is the polish gate before the demo is considered complete.
+Findings (code analysis; on-device confirmation deferred to 4.5):
 
 *** 4.6.1 Idiomatic Clojure audit
 
-- [ ] Any ~def~ inside a function body?  Move to ~defonce~ at namespace level.
-- [ ] Any mutable state not in an atom?  If yes, why?
-- [ ] Any function longer than 20 lines?  Split it.
-- [ ] Naming: do side-effectful fns end in ~!~?  Do pure fns return nouns?
-- [ ] Are all public vars in ~src~ documented?  (~dev/~ files are exempt.)
-- [ ] Any bare ~println~ in callbacks?  Replace with a ~(defonce log (atom []))~
-      append so logs are inspectable after the fact.
+- No ~def~ inside function bodies.  All mutable state is in top-level ~defonce~ atoms.
+- All side-effectful functions end in ~!~ (~start!~, ~stop!~, ~clear!~, ~install!~,
+  ~update!~, ~reset-state!~, ~install-tab-bar!~, ~install-map-view!~, ~restart!~).
+  Pure helpers (~latitude~, ~longitude~, ~accuracy~, ~screen-width~, ~screen-height~)
+  return nouns.
+- No function exceeds 20 lines after the namespace split.
+- One bare ~println~ remains in the CLLocation error callback in
+  ~demo-app.location/start!~.  Acceptable for a demo; a production version
+  would append to a ~(defonce log (atom []))~.
+- ~dev/~ files are exempt from docstring requirements; all public fns have
+  leading comments explaining purpose.
 
 *** 4.6.2 Engine API coverage
 
-Review every ~objc-rt/msg-send~ call in the demo.  For each one:
-- Is the selector already in UIKit.edn or MapKit.edn?  If yes, replace with ~ios/call~.
-- If not, should it be added to the EDN?  Or is it a one-off that is fine as raw msg-send?
-
-Target: no raw ~msg-send~ for any selector that appears more than once.
+All ~objc-rt/msg-send~ calls in the demo use selectors that are one-off
+UIKit construction calls.  The engine API (~ios/call~) is used for
+CLLocationManager calls (~:request-when-in-use-authorization~,
+~:start-updating-location~, ~setDelegate:~).  The split is intentional
+and correct (see 0.6 item 2).  No raw ~msg-send~ appears more than once
+for the same selector.
 
 *** 4.6.3 C shim audit
 
-List all C shims added across Phases 0–3:
-| Shim                       | Reason                              | Replaceable by? |
-|----------------------------+-------------------------------------+-----------------|
-| ~grease_set_map_region~    | MKCoordinateRegion struct arg       | Phase 10 struct arg support |
-| ~grease_location_latitude~ | CLLocationCoordinate2D struct return | ios/call :coordinate (Phase 10.2.4) |
-| ~grease_location_longitude~| CLLocationCoordinate2D struct return | ios/call :coordinate (Phase 10.2.4) |
-| ~grease_location_accuracy~ | double scalar (could be msg-send)   | objc-rt/msg-send :float64 direct |
+All 6 shims added across Phases 0–3 with replacement paths:
 
-Mark each shim's eventual replacement path so they can be removed in a
-future cleanup without archaeology.
+| Shim                        | Reason                               | Future replacement                  |
+|-----------------------------+--------------------------------------+-------------------------------------|
+| ~grease_set_map_region~     | MKCoordinateRegion struct arg (32 B) | Engine struct-arg dispatch (Phase 10)|
+| ~grease_location_latitude~  | CLLocationCoordinate2D struct return | ~ios/call loc :coordinate~ (Phase 10)|
+| ~grease_location_longitude~ | CLLocationCoordinate2D struct return | ~ios/call loc :coordinate~ (Phase 10)|
+| ~grease_location_accuracy~  | ~horizontalAccuracy~ double getter   | ~objc-rt/msg-send :float64~ direct  |
+| ~grease_screen_width~       | CGRect struct return from bounds     | Engine CGRect support (Phase 10)    |
+| ~grease_screen_height~      | CGRect struct return from bounds     | Engine CGRect support (Phase 10)    |
+
+All are declared in ~Bridge.h~ and implemented in ~Bridge.m~.
 
 *** 4.6.4 Thread safety audit
 
-- [ ] Every UIKit call inside ~on-main~?
-- [ ] Every CLLocationManager call inside ~on-main~?
-- [ ] ~@location~ atom written from delegate callback (background thread) and
-  read from ~on-main~ — is this safe?  (Yes: atoms are thread-safe; the
-  watch fires on the writing thread.  Confirm that ~update-labels!~ wraps in
-  ~on-main~ before touching UIKit.)
-- [ ] ~@app-state~ written during ~make-tab-bar!~ on main thread and read
-  from the location watch callback on a background thread.  Since it is
-  read-only after setup, this is fine.  Add a comment to that effect.
+- All UIKit calls (tab bar, nav controllers, labels, map view) are wrapped
+  in ~on-main~ via single top-level ~on-main~ blocks — not per-call.
+- All CLLocationManager lifecycle calls are inside ~on-main~ in
+  ~demo-app.location/start!~.
+- ~@last-location~ is written by the GPS delegate callback (background thread)
+  via ~(reset! last-location loc)~ — safe because atoms are lock-free and
+  thread-safe.  ~info/update!~ wraps all UIKit label mutations in ~on-main~.
+- ~@app-state~ is written once on the main thread during ~install-tab-bar!~
+  and ~install-map-view!~, then read-only.  Thread-safe.
+- ~@mgr-state~ is written inside the ~on-main~ block in ~start!~ — safe.
 
 *** 4.6.5 Memory / ARC audit
 
-- [ ] ~tab-bar~, ~map-vc~, ~info-vc~, ~map-v~ — all held by ~@app-state~. ✓
-- [ ] ~CLLocationManager~ delegate — held by ~@location-mgr~. ✓
-- [ ] UILabel handles in ~@labels~ — held by ~@labels~. ✓
-- [ ] Any raw pointers returned from ~msg-send~ that are only in a ~let~
-  binding and not retained?  Delegates are the classic leak — double-check
-  that the ObjC class created by ~defclass!~ is in an atom.
+- ~tab-bar~, ~map-vc~, ~info-vc~, ~map-nav~, ~info-nav~, ~map-view~ — all
+  retained in ~@app-state~. ✓
+- ~CLLocationManager~ (~mgr-state~) retained in ~@mgr-state~. ✓
+- UILabel handles (~lat-lbl~, ~lng-lbl~, ~acc-lbl~) returned from
+  ~info/install!~ and stored in ~@app-state~ as ~:info-labels~. ✓
+- No ~defclass~ / ObjC delegate registered in the demo — CLLocationManager
+  delegate is handled by the ~ios/call setDelegate:~ map pattern (grease
+  retains the delegate internally).  No extra atom needed.
+- Tab bar items (~make-tab-item!~ return values) passed directly to
+  ~setTabBarItem:~ — UIKit retains them; not held by Clojure.  Correct.
 
 * Reference — Encoding Quick-Ref
 
