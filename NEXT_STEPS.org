@@ -223,8 +223,12 @@ Also includes: ~key-window~, ~root-view~, ~subviews~, ~describe-view~,
 
 Scalar wrapper approach (3.1) is working and sufficient on arm64 (iPhone XR,
 414×896 pt screen confirmed). ~objc_msgSend_stret~ is not needed — on arm64,
-small structs fit in registers but clj-libffi has no struct-return support.
-The shim strategy (one C function per scalar component) is the correct path.
+all struct returns use ~objc_msgSend~ (no stret variant).
+UPDATE (Phase 10.2.4): clj-libffi DOES support struct returns via
+~ffi/call-ptr~ with a ~dt-struct/define-datatype!~ type.  ~invoke/dispatch!~
+now uses this path for all struct-returning methods (CGRect, CGPoint,
+CLLocationCoordinate2D, CMTime, etc.).  The scalar shim approach is still used
+by the legacy ~grease.ios.uikit~ wrapper.
 
 * Phase 4 — UIKit Live Manipulation [3/3] :DONE:
 
