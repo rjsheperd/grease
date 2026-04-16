@@ -225,7 +225,7 @@ After the rebuild, evaluate:
 Goal: two-tab ~UITabBarController~ installed as the root view controller,
 visible on device.  No map, no location yet.
 
-** TODO 1.1 Write ~dev/demo_app.clj~
+** DONE 1.1 Write ~dev/demo_app.clj~
 
 Create ~dev/demo_app.clj~ with the following structure.  All UIKit calls
 wrapped in ~on-main~:
@@ -312,7 +312,7 @@ wrapped in ~on-main~:
              :info-nav info-nav))))
 #+end_src
 
-** TODO 1.2 Add ~window~ property to ~GreaseHook.swift~
+** DONE 1.2 Add ~window~ property to ~GreaseHook.swift~
 
 The tab bar needs to replace the root view controller on the key window.
 ~GreaseHook.shared~ already exposes ~message~; add a ~window~ accessor:

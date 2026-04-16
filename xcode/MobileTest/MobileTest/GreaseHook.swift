@@ -13,6 +13,7 @@
 //    (objc-rt/msg-send :void hook "setMessage:" :pointer (f/->nsstring "Hello!"))
 
 import Foundation
+import UIKit
 
 // @objc(GreaseHook) pins the ObjC runtime name to "GreaseHook" (not "MobileTest.GreaseHook")
 // so Clojure can look it up via (get-objc-class "GreaseHook").
@@ -24,6 +25,18 @@ import Foundation
 
     private override init() {
         super.init()
+    }
+
+    // MARK: - Key window accessor
+
+    /// The app's key window, accessible from Clojure so the REPL can replace
+    /// the rootViewController without importing UIKit on the Clojure side.
+    ///
+    /// From Clojure:
+    ///   (def win (objc-rt/msg-send :pointer hook "window"))
+    ///   (objc-rt/msg-send :void win "setRootViewController:" :pointer tab-bar)
+    @objc var window: UIWindow? {
+        return UIApplication.shared.windows.first
     }
 
     // MARK: - REPL-driven display message
