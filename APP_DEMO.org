@@ -369,7 +369,7 @@ Evaluate ~dev/demo_app.clj~ after it works:
 Goal: the Map tab shows a full-screen ~MKMapView~, user location dot enabled,
 map centered on a placeholder coordinate (Apple HQ) until GPS is available.
 
-** TODO 2.1 Add ~MKMapView~ creation to ~demo_app.clj~
+** DONE 2.1 Add ~MKMapView~ creation to ~demo_app.clj~
 
 #+begin_src clojure
 (defn install-map-view!
@@ -390,7 +390,7 @@ map centered on a placeholder coordinate (Apple HQ) until GPS is available.
       (swap! app-state assoc :map-view map-v))))
 #+end_src
 
-** TODO 2.2 Move map helpers into ~dev/demo_app/map.clj~
+** DONE 2.2 Move map helpers into ~dev/demo_app/map.clj~
 
 Extract map-specific functions to keep ~demo_app.clj~ readable:
 
@@ -456,7 +456,7 @@ Gate: map tiles load, ~showsUserLocation~ is true, no crash.
 Goal: ~CLLocationManager~ running, map re-centers on each GPS fix,
 ~@location~ atom always holds the latest ~CLLocation~.
 
-** TODO 3.1 Write ~dev/demo_app/location.clj~
+** DONE 3.1 Write ~dev/demo_app/location.clj~
 
 #+begin_src clojure
 (ns demo-app.location
@@ -496,7 +496,7 @@ Goal: ~CLLocationManager~ running, map re-centers on each GPS fix,
     (on-main (ios/call mgr :stop-updating-location))))
 #+end_src
 
-** TODO 3.2 Wire ~@location~ to the map in ~demo_app.clj~
+** DONE 3.2 Wire ~@location~ to the map in ~demo_app.clj~
 
 #+begin_src clojure
 (defn watch-location!
@@ -580,7 +580,7 @@ Gate: ~@location~ non-nil; map centers on real device position.
 Goal: the Info tab shows live lat/lon/accuracy/timestamp labels; map tracking
 mode is cleaned up; the full app reloads cleanly from REPL without crashing.
 
-** TODO 4.1 Write ~dev/demo_app/info.clj~
+** DONE 4.1 Write ~dev/demo_app/info.clj~
 
 #+begin_src clojure
 (ns demo-app.info
@@ -625,7 +625,7 @@ mode is cleaned up; the full app reloads cleanly from REPL without crashing.
       (ui/set-text! acc-l  (format "Accuracy: ±%.0fm" accuracy)))))
 #+end_src
 
-** TODO 4.2 Wire ~@location~ watch to info labels
+** DONE 4.2 Wire ~@location~ watch to info labels
 
 In ~demo_app.clj~ or ~demo-app.location~:
 
@@ -639,7 +639,7 @@ In ~demo_app.clj~ or ~demo-app.location~:
         (demo-app.info/update-labels! loc-map)))))
 #+end_src
 
-** TODO 4.3 Switch map to native tracking mode
+** DONE 4.3 Switch map to native tracking mode
 
 Replace the ~add-watch~ + ~set-map-region!~ cycle from Phase 3 with native
 MapKit tracking:
@@ -654,7 +654,7 @@ no longer needed.  Keep ~watch-info!~.
 
 Gate: map auto-follows user; Info tab updates with every GPS fix.
 
-** TODO 4.4 Write ~dev/demo_app/reload.clj~ — hot-reload helper
+** DONE 4.4 Write ~dev/demo_app/reload.clj~ — hot-reload helper
 
 #+begin_src clojure
 (ns demo-app.reload
