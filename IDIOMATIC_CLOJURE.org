@@ -398,7 +398,7 @@ Expands to a ~fn []~ body calling ~set-alpha!~, ~set-frame!~, ~set-background-co
 ~NSLayoutConstraint constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:~
 is a pure ~msg-send~ — no struct shims needed.
 
-** TODO 6.1 ~(constrain! parent constraint-forms)~
+** DONE 6.1 ~(constrain! parent constraint-forms)~ + ~(layout-> parent forms...)~
 
 #+begin_src clojure
 (constrain! root
@@ -416,12 +416,12 @@ Attribute keyword → ~NSLayoutAttribute~ integer:
 For each form: compile to ~NSLayoutConstraint~, activate via ~setActive: 1~.
 Set ~translatesAutoresizingMaskIntoConstraints = NO~ on every constrained view.
 
-** TODO 6.2 Safe area insets
+** DONE 6.2 Safe area insets
 
 ~safeAreaInsets~ returns a ~UIEdgeInsets~ struct. Access via ~ffi/call-ptr~ on the
 existing uikit struct helpers rather than adding C shims.
 
-** TODO 6.3 Hiccup integration
+** TODO 6.3 Hiccup integration  [deferred: depends on Phase 4]
 
 ~:constraints~ prop on a container: after rendering children, call ~constrain!~.
 On re-render: deactivate old constraints, activate new ones.
