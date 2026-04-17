@@ -18,6 +18,7 @@
                    (assoc state :location locs))}})"
   (:require [clojure.string :as str]
             [com.phronemophobic.grease :as grease]
+            [grease.ios.foundation :as f]
             [grease.ios.objc :as objc-rt]
             [grease.ios.retain :as retain]))
 
@@ -58,17 +59,17 @@
 (defn ^:no-doc register-instance!
   "Associates ObjC `ptr` with Clojure `ag` in the dispatch table."
   [ptr ag]
-  (swap! instances assoc (.address ^Object ptr) ag))
+  (swap! instances assoc (f/ptr-address ptr) ag))
 
 (defn ^:no-doc unregister-instance!
   "Removes the entry for ObjC `ptr` from the dispatch table."
   [ptr]
-  (swap! instances dissoc (.address ^Object ptr)))
+  (swap! instances dissoc (f/ptr-address ptr)))
 
 (defn ^:no-doc lookup-agent
   "Returns the agent for ObjC `self`, or nil if not found."
   [self]
-  (get @instances (.address ^Object self)))
+  (get @instances (f/ptr-address self)))
 
 ;; =============================================================================
 ;; Public helpers (Phase 1.5)

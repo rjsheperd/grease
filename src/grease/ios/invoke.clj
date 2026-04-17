@@ -27,10 +27,7 @@
             [grease.ios.objc :as objc]
             [grease.ios.patterns :as patterns]
             [grease.ios.structs :as structs]
-            [grease.ios.types :as types]
-            [tech.v3.datatype.ffi :as dt-ffi]
-            [tech.v3.datatype.native-buffer :as native-buffer]
-            [tech.v3.datatype.struct :as dt-struct]))
+            [grease.ios.types :as types]))
 
 ;; =============================================================================
 ;; Encoding parsing
@@ -130,12 +127,12 @@
   a composite ffi_type for it.  Nested struct fields are registered
   recursively.  Idempotent — safe to call every dispatch."
   [struct-name]
-  (when-not (dt-struct/struct-datatype? (keyword struct-name))
+  (when-not (grease/struct-datatype? (keyword struct-name))
     (let [spec (structs/struct-for struct-name)]
       (doseq [{:keys [type]} (:fields spec)]
         (when (and (not (get prim->dtype type)) (structs/known-struct? type))
           (ensure-ffi-struct! type)))
-      (dt-struct/define-datatype!
+      (grease/struct-define-datatype!
         (keyword struct-name)
         (mapv (fn [{:keys [name type]}]
                 {:name     (keyword name)
@@ -145,7 +142,7 @@
 (def ^:private msg-send-fptr
   "Lazy reference to the objc_msgSend function pointer.
   Resolved once on first struct dispatch."
-  (delay (ffi/dlsym ffi/RTLD_DEFAULT (dt-ffi/string->c "objc_msgSend"))))
+  (delay (ffi/dlsym ffi/RTLD_DEFAULT (grease/string->c "objc_msgSend"))))
 
 (defn- bb-get-long
   "Reads a long from buf at absolute byte offset.
@@ -177,11 +174,11 @@
   [struct-name m]
   (let [bb   (structs/pack struct-name m)
         size (:size (structs/struct-for struct-name))
-        nbuf (native-buffer/malloc size {:resource-type :gc})]
+        nbuf (grease/native-malloc size)]
     (.position bb 0)
     (dotimes [i (quot size 8)]
-      (native-buffer/write-long nbuf (* i 8) (bb-get-long bb (* i 8))))
-    (dt-struct/inplace-new-struct (keyword struct-name) nbuf)))
+      (grease/native-write-long nbuf (* i 8) (bb-get-long bb (* i 8))))
+    (grease/struct-inplace-new (keyword struct-name) nbuf)))
 
 ;; =============================================================================
 ;; Auto-coercion for id-typed arguments

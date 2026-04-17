@@ -14,8 +14,7 @@
   | pointer                  | returned as-is (idempotent)         |"
   (:require [com.phronemophobic.grease :as grease]
             [grease.ios.foundation :as f]
-            [grease.ios.objc :as objc-rt]
-            [tech.v3.datatype.ffi :as dt-ffi]))
+            [grease.ios.objc :as objc-rt]))
 
 ;; ── Selector table ──────────────────────────────────────────────────────────
 
@@ -69,7 +68,7 @@
                         {:spec spec}))))
 
     ;; Already a pointer — idempotent
-    (dt-ffi/convertible-to-pointer? spec) spec
+    (grease/convertible-to-pointer? spec) spec
 
     :else
     (throw (ex-info (str "Cannot coerce to UIFont: " (pr-str spec))

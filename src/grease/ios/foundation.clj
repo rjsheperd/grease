@@ -18,8 +18,7 @@
   dispatch_queue_t (which tells CB/CL managers to use the main queue)."
   (:require [com.phronemophobic.clj-libffi :as ffi]
             [com.phronemophobic.grease :as grease]
-            [grease.ios.retain :as retain]
-            [tech.v3.datatype.ffi :as dt-ffi]))
+            [grease.ios.retain :as retain]))
 
 (defn- ^:private msg-send*
   "Internal ObjC message send; avoids a circular dependency on grease.ios.objc."
@@ -37,7 +36,7 @@
   "Returns the UTF-8 Clojure string contents of an NSString pointer."
   [ptr]
   (let [c-ptr (msg-send* :pointer ptr "UTF8String")]
-    (dt-ffi/c->string c-ptr)))
+    (grease/c->string c-ptr)))
 
 (defn ->nsstring
   "Returns an autoreleased NSString for the Clojure string s."
@@ -45,7 +44,7 @@
   (msg-send* :pointer
              (grease/get-objc-class "NSString")
              "stringWithUTF8String:" :pointer
-             (dt-ffi/string->c s)))
+             (grease/string->c s)))
 
 ;; =============================================================================
 ;; NSNumber
@@ -153,6 +152,20 @@
   "Returns the absolute string of an NSURL pointer as a Clojure string."
   [url]
   (nsstring->str (msg-send* :pointer url "absoluteString")))
+
+;; =============================================================================
+;; ObjC pointer address
+;; =============================================================================
+
+(defn ptr-address
+  "Returns the native memory address of an ObjC pointer as a long.
+
+  Delegates to [[com.phronemophobic.grease/ptr-address]], which is JVM-compiled
+  and uses a `^Pointer` type hint for direct field access.  This wrapper exists
+  so callers can use the `grease.ios.foundation` alias (e.g. `f/ptr-address`)
+  without needing to require `com.phronemophobic.grease` directly."
+  [ptr]
+  (grease/ptr-address ptr))
 
 ;; =============================================================================
 ;; Null pointer helpers

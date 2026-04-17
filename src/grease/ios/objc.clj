@@ -38,8 +38,7 @@
     ;; After granting permission on device:
     @last-location  ;; => non-nil CLLocation pointer"
   (:require [com.phronemophobic.clj-libffi :as ffi]
-            [com.phronemophobic.grease :as grease]
-            [tech.v3.datatype.ffi :as dt-ffi]))
+            [com.phronemophobic.grease :as grease]))
 
 ;; =============================================================================
 ;; ObjC type encoding reference
@@ -179,7 +178,7 @@
     (add-protocol! MyLocationDelegate \"CLLocationManagerDelegate\")"
   [cls protocol-name]
   (let [proto (ffi/call "objc_getProtocol" :pointer
-                        :pointer (dt-ffi/string->c protocol-name))]
+                        :pointer (grease/string->c protocol-name))]
     (if (and proto (not= 0 (.hashCode proto)))
       (do (ffi/call "class_addProtocol" :int8 :pointer cls :pointer proto)
           true)
@@ -189,7 +188,7 @@
   "Returns true if cls declares conformance to the named ObjC protocol."
   [cls protocol-name]
   (let [proto (ffi/call "objc_getProtocol" :pointer
-                        :pointer (dt-ffi/string->c protocol-name))]
+                        :pointer (grease/string->c protocol-name))]
     (if (and proto (not= 0 (.hashCode proto)))
       (not= 0 (ffi/call "class_conformsToProtocol" :int8
                         :pointer cls :pointer proto))

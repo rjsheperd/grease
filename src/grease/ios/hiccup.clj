@@ -85,7 +85,7 @@
         imp (grease/make-imp
              (fn [_self _cmd sender]
                (when-let [handlers (get @event-dispatch
-                                        (.address ^Object sender))]
+                                        (f/ptr-address sender))]
                  (doseq [[_ cb] handlers]
                    (try (cb) (catch Exception _)))))
              [:pointer]
@@ -102,7 +102,7 @@
   "Wires `callback-fn` to `control` for `event-int`, clearing any existing
   handlers first to prevent duplicate accumulation on re-render."
   [control event-int callback-fn]
-  (let [addr (.address ^Object control)
+  (let [addr (f/ptr-address control)
         k    (gensym "event-")]
     ;; Clear all existing targets for this control before re-wiring so that
     ;; repeated renders never accumulate duplicate event handlers.

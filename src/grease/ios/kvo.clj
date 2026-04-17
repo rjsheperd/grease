@@ -38,7 +38,7 @@
         imp (grease/make-imp
              (fn [self _cmd _keypath _object change _context]
                (when-let [a (get @observer-dispatch
-                                 (.address ^Object self))]
+                                 (f/ptr-address self))]
                  ;; Extract new value from change dict using NSKeyValueChangeNewKey (@"new")
                  (let [new-key (f/->nsstring "new")
                        new-val (objc-rt/msg-send :pointer change
@@ -96,7 +96,7 @@
         obs      (grease/objc-new _kvo-observer-cls)
         rk       (retain/retain! (gensym "kvo-") obs ::kvo-observer)]
     (swap! observer-dispatch assoc
-           (.address ^Object obs) a)
+           (f/ptr-address obs) a)
     (objc-rt/msg-send :void obj
                       "addObserver:forKeyPath:options:context:"
                       :pointer obs
@@ -122,7 +122,7 @@
                       :pointer (f/->nsstring keypath))
     ;; Clean up
     (swap! observer-dispatch dissoc
-           (.address ^Object observer-ptr))
+           (f/ptr-address observer-ptr))
     (retain/release! rk)))
 
 ;; =============================================================================

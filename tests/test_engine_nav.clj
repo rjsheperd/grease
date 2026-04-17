@@ -24,7 +24,7 @@
 (check "2. nav-vc-registry is an atom"
   "(do
      (require '[grease.ios.nav :as nav])
-     (instance? clojure.lang.Atom nav/nav-vc-registry))"
+     (map? @nav/nav-vc-registry))"
   #(= "true" (:value %)))
 
 ;; ─── Setup: define reusable screen specs ─────────────────────────────────────
@@ -45,12 +45,15 @@
 ;; ─── 3. make-nav! grows nav-vc-registry by 1 ─────────────────────────────────
 ;;
 ;; make-vc! registers the root VC synchronously before UIKit wires it up.
+;; make-nav! calls initWithRootViewController: which accesses UIKit layout,
+;; so it must run on the main thread.
 
 (check "3. make-nav! adds 1 entry to nav-vc-registry"
   "(do
-     (require '[grease.ios.nav :as nav])
+     (require '[grease.ios.nav  :as nav]
+              '[grease.ios.repl :refer [on-main]])
      (def nav-before (count @nav/nav-vc-registry))
-     (def nav-test-nc (nav/make-nav! NavTestRoot))
+     (def nav-test-nc (on-main (nav/make-nav! NavTestRoot)))
      (= (inc nav-before) (count @nav/nav-vc-registry)))"
   #(= "true" (:value %))
   :timeout 10000)

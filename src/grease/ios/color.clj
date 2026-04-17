@@ -12,8 +12,7 @@
   (:require [clojure.edn :as edn]
             [com.phronemophobic.grease :as grease]
             [grease.ios-host :as host]
-            [grease.ios.objc :as objc-rt]
-            [tech.v3.datatype.ffi :as dt-ffi]))
+            [grease.ios.objc :as objc-rt]))
 
 ;; ── Color name table ────────────────────────────────────────────────────────
 
@@ -112,7 +111,7 @@
                           :float64 r :float64 g :float64 b :float64 a)))
 
     ;; Already a pointer — idempotent
-    (dt-ffi/convertible-to-pointer? spec) spec
+    (grease/convertible-to-pointer? spec) spec
 
     :else
     (throw (ex-info (str "Cannot coerce to UIColor: " (pr-str spec))

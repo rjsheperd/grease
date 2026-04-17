@@ -72,7 +72,7 @@
         vdl-imp
         (grease/make-imp
          (fn [self _cmd]
-           (let [vc-addr (.address ^Object self)]
+           (let [vc-addr (f/ptr-address self)]
              (when-let [{:keys [screen-spec nav-key state]}
                         (get @nav-vc-registry vc-addr)]
                (let [root-view (objc-rt/msg-send :pointer self "view")
@@ -98,7 +98,7 @@
                                         :int64 self
                                         "isMovingFromParentViewController")))]
              (when moving?
-               (cleanup-vc! (.address ^Object self)))))
+               (cleanup-vc! (f/ptr-address self)))))
          [:int8]
          :void)
         vwd-sel (grease/register-objc-sel "viewWillDisappear:")]
@@ -126,7 +126,7 @@
         nav-key (gensym "nav-vc-")
         rk      (retain/retain! nav-key vc ::nav-vc)]
     (swap! nav-vc-registry assoc
-           (.address ^Object vc)
+           (f/ptr-address vc)
            {:screen-spec screen-spec
             :nav-key     nav-key
             :state       state

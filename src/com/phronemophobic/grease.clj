@@ -1,5 +1,7 @@
 (ns com.phronemophobic.grease
   (:require [tech.v3.datatype.ffi :as dt-ffi]
+            [tech.v3.datatype.native-buffer :as native-buffer]
+            [tech.v3.datatype.struct :as dt-struct]
             [sci.core :as sci]
             [sci.addons :as addons]
             babashka.nrepl.server
@@ -161,6 +163,64 @@
   (ffi/call "class_addMethod" :int8
             :pointer cls :pointer sel :pointer imp :pointer (dt-ffi/string->c type-encoding)))
 
+(defn ptr-address
+  "Returns the native memory address of an ObjC pointer as a long.
+
+  Implemented in JVM-compiled code so that the `^Pointer` type hint is
+  resolved at compile time (direct field access, no reflection).  The
+  SCI interpreter cannot resolve `tech.v3.datatype.ffi.Pointer` as a
+  class name at eval time, so this must NOT live in SCI-interpreted code."
+  ^long [ptr]
+  (.address ^Pointer ptr))
+
+(defn c->string
+  "Converts a C string (char*) pointer to a Clojure string.
+  JVM bridge for `tech.v3.datatype.ffi/c->string` — safe to call from SCI."
+  [ptr]
+  (dt-ffi/c->string ptr))
+
+(defn string->c
+  "Converts a Clojure string to a C string (char*) pointer.
+  JVM bridge for `tech.v3.datatype.ffi/string->c` — safe to call from SCI."
+  [s]
+  (dt-ffi/string->c s))
+
+(defn convertible-to-pointer?
+  "Returns true if x implements `dt-ffi/PToPointer` (i.e. is already an ObjC pointer).
+  JVM bridge — safe to call from SCI-interpreted code."
+  [x]
+  (dt-ffi/convertible-to-pointer? x))
+
+(defn native-malloc
+  "Allocates a GC-managed native memory buffer of `size` bytes.
+  JVM bridge for `tech.v3.datatype.native-buffer/malloc` — safe to call from SCI."
+  [size]
+  (native-buffer/malloc size {:resource-type :gc}))
+
+(defn native-write-long
+  "Writes `long-val` at `byte-offset` in native buffer `nbuf`.
+  JVM bridge for `tech.v3.datatype.native-buffer/write-long` — safe to call from SCI."
+  [nbuf byte-offset long-val]
+  (native-buffer/write-long nbuf byte-offset long-val))
+
+(defn struct-inplace-new
+  "Wraps native buffer `nbuf` as a struct of `type-kw`.
+  JVM bridge for `tech.v3.datatype.struct/inplace-new-struct` — safe to call from SCI."
+  [type-kw nbuf]
+  (dt-struct/inplace-new-struct type-kw nbuf))
+
+(defn struct-datatype?
+  "Returns true if `kw` is a registered struct type in the dt-struct registry.
+  JVM bridge for `tech.v3.datatype.struct/struct-datatype?` — safe to call from SCI."
+  [kw]
+  (dt-struct/struct-datatype? kw))
+
+(defn struct-define-datatype!
+  "Registers a struct layout in the dt-struct registry.
+  JVM bridge for `tech.v3.datatype.struct/define-datatype!` — safe to call from SCI."
+  [kw fields]
+  (dt-struct/define-datatype! kw fields))
+
 (defn objc-new
   "Sends +new to cls, returning the new instance pointer."
   [cls]
@@ -203,6 +263,13 @@
 
 (def ^:private opts
   (-> {:classes {:allow :all
+                 ;; Explicit registrations let SCI resolve class names in
+                 ;; type hints and :import forms even when the namespace
+                 ;; source is loaded lazily (e.g. tech.v3.datatype.ffi
+                 ;; imports Pointer and Library in its own ns form).
+                 'Pointer                      tech.v3.datatype.ffi.Pointer
+                 'tech.v3.datatype.ffi.Pointer tech.v3.datatype.ffi.Pointer
+                 'NativeBuffer                 tech.v3.datatype.native_buffer.NativeBuffer
                  'System              java.lang.System
                  'java.net.URL        java.net.URL
                  'ByteBuffer          java.nio.ByteBuffer
@@ -252,6 +319,15 @@
                     'register-objc-class! (sci/copy-var register-objc-class! sci-ns)
                     'register-objc-sel    (sci/copy-var register-objc-sel sci-ns)
                     'add-objc-method!     (sci/copy-var add-objc-method! sci-ns)
+                    'ptr-address               (sci/copy-var ptr-address sci-ns)
+                    'c->string                 (sci/copy-var c->string sci-ns)
+                    'string->c                 (sci/copy-var string->c sci-ns)
+                    'convertible-to-pointer?   (sci/copy-var convertible-to-pointer? sci-ns)
+                    'native-malloc             (sci/copy-var native-malloc sci-ns)
+                    'native-write-long         (sci/copy-var native-write-long sci-ns)
+                    'struct-inplace-new        (sci/copy-var struct-inplace-new sci-ns)
+                    'struct-datatype?          (sci/copy-var struct-datatype? sci-ns)
+                    'struct-define-datatype!   (sci/copy-var struct-define-datatype! sci-ns)
                     'objc-new             (sci/copy-var objc-new sci-ns)
                     'make-imp             (sci/copy-var make-imp sci-ns)
                     'live-imps            (sci/copy-var live-imps sci-ns)

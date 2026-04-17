@@ -1,14 +1,17 @@
 ;; tests/test_runner.clj — shared nREPL test infrastructure.
 ;;
-;; Load-file'd at the top of every individual test script:
-;;   (load-file "tests/test_runner.clj")
+;; Two usage modes:
 ;;
-;; Provides:
-;;   *host*, *port*           — dynamic vars for connection settings
-;;   connect!                 — opens a nREPL connection, stores in *conn*
-;;   eval!                    — evaluates code, returns {:value :err :ok?}
-;;   check                    — run a single labelled assertion
-;;   run-suite                — run a named seq of checks, print summary, exit
+;;   Standalone (one suite per JVM — original behaviour):
+;;     (load-file "tests/test_runner.clj")
+;;     (connect!)
+;;     ... checks ...
+;;     (run-suite "Suite name")   ;; exits 1 on failure
+;;
+;;   Composed (all suites in one JVM — via run_all_tests.clj):
+;;     connect! is idempotent — subsequent calls reuse the open connection.
+;;     run-suite does NOT call System/exit; it returns {:passed n :failed n}.
+;;     The top-level runner calls (System/exit 1) after all suites complete.
 
 (require '[nrepl.core :as nrepl])
 
@@ -19,14 +22,15 @@
 
 (defn connect!
   "Opens a persistent nREPL connection with a 120-second client timeout.
-  Subsequent eval! calls reuse it."
+  Idempotent: if a connection is already open, this is a no-op."
   ([] (connect! *host* *port*))
   ([host port]
-   (let [conn    (nrepl/connect :host host :port port)
-         client  (nrepl/client conn 120000)
-         session (nrepl/client-session client)]
-     (swap! state assoc :conn conn :client client :session session)
-     (println (str "Connected to " host ":" port "\n")))))
+   (when-not (:conn @state)
+     (let [conn    (nrepl/connect :host host :port port)
+           client  (nrepl/client conn 120000)
+           session (nrepl/client-session client)]
+       (swap! state assoc :conn conn :client client :session session)
+       (println (str "Connected to " host ":" port "\n"))))))
 
 (defn eval!
   "Evaluates code on the device via the open session.
@@ -49,6 +53,11 @@
 
 (def ^:private results (atom []))
 
+(defn reset-results!
+  "Clears the accumulated results. Called by run_all_tests.clj between suites."
+  []
+  (reset! results []))
+
 (defn check
   "Runs one labelled assertion against the device REPL.
   pred-or-expected: a fn (applied to result map) or a string (matched against :value).
@@ -67,11 +76,13 @@
     pass?))
 
 (defn run-suite
-  "Prints a summary for the current result set.  Exits with code 1 if any failed."
+  "Prints a summary for the current result set.
+  Returns {:passed n :failed n :suite suite-name}.
+  In standalone mode (single-suite JVM), exits with code 1 if any failed."
   [suite-name]
-  (let [all     @results
-        passed  (filter :pass? all)
-        failed  (remove :pass? all)]
+  (let [all    @results
+        passed (filter :pass? all)
+        failed (remove :pass? all)]
     (println)
     (println (apply str (repeat 60 "=")))
     (doseq [{:keys [label pass?]} all]
@@ -79,6 +90,14 @@
     (println)
     (if (empty? failed)
       (println (str "ALL TESTS PASSED — " suite-name))
-      (do
-        (println (str (count failed) "/" (count all) " TESTS FAILED — " suite-name))
-        (System/exit 1)))))
+      (println (str (count failed) "/" (count all) " TESTS FAILED — " suite-name)))
+    (flush)
+    (let [summary {:suite suite-name
+                   :passed (count passed)
+                   :failed (count failed)}]
+      ;; Standalone mode: exit immediately on failure so the suite's clj
+      ;; process returns non-zero to the shell.
+      (when (and (pos? (count failed))
+                 (not (resolve 'run-all-suites)))
+        (System/exit 1))
+      summary)))
