@@ -1,9 +1,17 @@
 (ns grease.ios.hiccup
-  "Hiccup-style UIKit view trees.
+  "Hiccup-style UIKit view trees with a smart, incremental reconciler.
 
-  [[render!]] mounts a hiccup vector as a UIKit view subtree under a named
-  root view.  Subsequent calls to [[render!]] with the same key tear down the
-  old subtree and rebuild from scratch (naive reconciler).
+  [[render!]] / [[mount!]] mounts a hiccup vector as a UIKit view subtree.
+  Subsequent renders reconcile in-place — patching only changed props, using
+  keyed child matching to avoid unnecessary teardowns, and skipping unchanged
+  subtrees entirely via reference-equality short-circuit.
+
+  Five-layer diffing pipeline:
+    Layer 1 — subtree identity skip (`identical?` / string `=` guard)
+    Layer 2 — keyed child diffing (`insertSubview:atIndex:` reorder)
+    Layer 3 — prop removal defaults + event-handler dedup
+    Layer 4 — [[memo]] helper for user-controlled subtree caching
+    Layer 5 — [[mount-subtree!]] for atom-scoped sub-region watches
 
   Hiccup format:
     `[:tag props? & children]`
@@ -13,11 +21,12 @@
   - `children` — nested hiccup vecs or strings (auto-wrapped in `:label`)
 
   Example:
-    (render! :main-ui
-      [:stack {:axis 1 :spacing 8.0}
-       [:label {:text \"Hello\" :font [:system 18] :align 1}]
-       [:button {:text \"OK\" :bg :system-blue
-                 :on-tap (fn [] (println \"tapped\"))}]])
+    (mount! :main-ui root-view [state]
+      (fn []
+        [:stack {:axis 1 :spacing 8.0}
+         [:label {:text \"Hello\" :font [:system 18] :align 1}]
+         [:button {:text \"OK\" :bg :system-blue
+                   :on-tap (fn [] (println \"tapped\"))}]]))
 
   All UIKit operations are dispatched to the main thread via
   `grease/dispatch-main-async`."
@@ -89,9 +98,20 @@
 (defonce ^:no-doc _control-target-instance
   (grease/objc-new _control-target-cls))
 
-(defn- wire-event! [control event-int callback-fn]
+(defn- wire-event!
+  "Wires `callback-fn` to `control` for `event-int`, clearing any existing
+  handlers first to prevent duplicate accumulation on re-render."
+  [control event-int callback-fn]
   (let [addr (.address ^Object control)
         k    (gensym "event-")]
+    ;; Clear all existing targets for this control before re-wiring so that
+    ;; repeated renders never accumulate duplicate event handlers.
+    (objc-rt/msg-send :void control
+                      "removeTarget:action:forControlEvents:"
+                      :pointer (f/null-ptr)
+                      :pointer 0
+                      :int64   event-int)
+    (swap! event-dispatch dissoc addr)
     (swap! event-dispatch update addr assoc k callback-fn)
     (objc-rt/msg-send :void control
                       "addTarget:action:forControlEvents:"
@@ -188,13 +208,19 @@
 
 ;; A rendered-node is a plain map:
 ;;   {:tag kw :props map :view ptr :rk retain-key :children [rendered-node...]}
+;;
+;; rendered-trees holds a richer entry per root-key:
+;;   {root-key → {:node rendered-node
+;;                :subtrees {subkey → {:node rendered-node :parent-view ptr}}}}
 
 (def ^:private rendered-trees
-  "Map of {root-key → rendered-node} for mounted subtrees."
+  "Map of {root-key → {:node rendered-node :subtrees {subkey → {:node node :parent-view ptr}}}}
+  for mounted subtrees."
   (atom {}))
 
 (def ^:private mount-watches
-  "Map of {root-key → [[atom watch-key] ...]} for reactive `mount!` bindings."
+  "Map of {root-key → [[atom watch-key] ...]} and
+  {[root-key subkey] → [[atom watch-key] ...]} for reactive bindings."
   (atom {}))
 
 (defn- normalize-hiccup
@@ -215,13 +241,26 @@
 
 (defn teardown-rendered!
   "Removes the top-level rendered view for `root-key` from its superview and
-  releases all resources in the subtree.
+  releases all resources in the subtree, including any mounted subtrees.
 
   No-op if `root-key` is not currently rendered."
   [root-key]
-  (when-let [node (get @rendered-trees root-key)]
-    (objc-rt/msg-send :void (:view node) "removeFromSuperview")
-    (release-rendered! node)
+  (when-let [entry (get @rendered-trees root-key)]
+    ;; entry may be a {:node ... :subtrees ...} map (new style) or a bare
+    ;; rendered-node (injected by tests).
+    (let [node     (if (contains? entry :node) (:node entry) entry)
+          subtrees (when (contains? entry :subtrees) (:subtrees entry))]
+      ;; Tear down subtrees first.
+      (doseq [[_sk st] subtrees]
+        (when-let [st-node (:node st)]
+          (when (:view st-node)
+            (objc-rt/msg-send :void (:view st-node) "removeFromSuperview"))
+          (release-rendered! st-node)))
+      ;; Tear down root node.
+      (when node
+        (when (:view node)
+          (objc-rt/msg-send :void (:view node) "removeFromSuperview"))
+        (release-rendered! node)))
     (swap! rendered-trees dissoc root-key)))
 
 ;; =============================================================================
@@ -276,8 +315,11 @@
     (layout/constrain! container-view specs)))
 
 ;; =============================================================================
-;; render-tree! (Phase 4.2→6.3)
+;; render-tree! / reconcile! / reconcile-children! (Phase 4.2→6.3 + Layer 2)
 ;; =============================================================================
+
+;; Forward declaration for mutual recursion between reconcile! and reconcile-children!.
+(declare reconcile!)
 
 (defn- render-tree!
   "Creates a UIKit view tree from `hiccup-node` and adds it as a subview of
@@ -294,7 +336,8 @@
     (let [view (create-element :label {:text hiccup-node})
           rk   (-> view meta ::retain-key)]
       (objc-rt/msg-send :void parent-view "addSubview:" :pointer view)
-      {:tag :label :props {:text hiccup-node} :key nil :view view :rk rk :children []})
+      {:tag :label :props {:text hiccup-node} :key nil
+       :view view :rk rk :children [] :hiccup hiccup-node})
 
     (vector? hiccup-node)
     (let [[tag all-props children] (normalize-hiccup hiccup-node)
@@ -307,13 +350,100 @@
           child-nodes (mapv #(render-tree! view %) children)]
       (when constraints
         (apply-constraints! view child-nodes constraints))
-      {:tag tag :props props :key k :view view :rk rk :children child-nodes})
+      {:tag tag :props props :key k :view view :rk rk
+       :children child-nodes :hiccup hiccup-node})
 
     :else
     (throw (ex-info "Unrecognised hiccup node" {:node hiccup-node}))))
 
+(defn- new-hiccup-key
+  "Returns the `:key` prop from a hiccup child form, or nil for strings."
+  [child]
+  (when (vector? child)
+    (:key (second (normalize-hiccup child)))))
+
+(defn- reconcile-children!
+  "Reconciles `old-children` (rendered-nodes) with `new-children` (hiccup forms)
+  under `parent-view`.
+
+  If none of the old or new children have a non-nil `:key`, falls through to
+  the positional algorithm.  Otherwise uses the keyed algorithm:
+
+  1. Build `old-key-map` from old-children (keyed children only).
+  2. Match new-children to old-children by key; unkeyed match positionally.
+  3. Tear down leftover old children (keyed whose key is absent + extra unkeyed).
+  4. Re-order reconciled children via `insertSubview:atIndex:` if needed.
+
+  Returns a vector of reconciled rendered-nodes."
+  [parent-view old-children new-children]
+  (let [any-keyed? (or (some :key old-children)
+                       (some new-hiccup-key new-children))]
+    (if-not any-keyed?
+      ;; ── Positional algorithm (original behaviour) ──────────────────────────
+      (let [n-old  (count old-children)
+            n-new  (count new-children)
+            shared (min n-old n-new)
+            reconciled (mapv #(reconcile! parent-view %1 %2)
+                             (take shared old-children)
+                             (take shared new-children))
+            added      (mapv #(render-tree! parent-view %)
+                             (drop shared new-children))]
+        (doseq [extra (drop shared old-children)]
+          (objc-rt/msg-send :void (:view extra) "removeFromSuperview")
+          (release-rendered! extra))
+        (into reconciled added))
+
+      ;; ── Keyed algorithm ────────────────────────────────────────────────────
+      (let [old-key-map   (into {} (keep (fn [n] (when (:key n) [(:key n) n]))
+                                         old-children))
+            old-unkeyed   (filterv #(nil? (:key %)) old-children)
+            unkeyed-idx   (volatile! 0)
+            new-nodes     (mapv (fn [new-child]
+                                  (let [nk (new-hiccup-key new-child)]
+                                    (cond
+                                      ;; Keyed new child with matching old node.
+                                      (and nk (contains? old-key-map nk))
+                                      (reconcile! parent-view
+                                                  (get old-key-map nk)
+                                                  new-child)
+
+                                      ;; Keyed new child with no old match — fresh insert.
+                                      nk
+                                      (render-tree! parent-view new-child)
+
+                                      ;; Unkeyed — match positionally against old unkeyed.
+                                      :else
+                                      (let [idx @unkeyed-idx
+                                            old (get old-unkeyed idx)]
+                                        (vswap! unkeyed-idx inc)
+                                        (if old
+                                          (reconcile! parent-view old new-child)
+                                          (render-tree! parent-view new-child))))))
+                                new-children)
+            ;; Keys present in old but not in new → tear down.
+            new-keys      (set (keep new-hiccup-key new-children))
+            leftover-keyed (remove (fn [n] (contains? new-keys (:key n)))
+                                   (vals old-key-map))
+            leftover-unkeyed (drop @unkeyed-idx old-unkeyed)]
+        (doseq [extra (concat leftover-keyed leftover-unkeyed)]
+          (objc-rt/msg-send :void (:view extra) "removeFromSuperview")
+          (release-rendered! extra))
+        ;; Re-order: emit insertSubview:atIndex: for any node not at target index.
+        (let [current-subviews (f/nsarray->vec
+                                (objc-rt/msg-send :pointer parent-view "subviews"))
+              view->idx        (into {} (map-indexed (fn [i v] [v i]) current-subviews))]
+          (doseq [[target-idx node] (map-indexed vector new-nodes)]
+            (let [current-idx (get view->idx (:view node))]
+              (when (and current-idx (not= current-idx target-idx))
+                (objc-rt/msg-send :void parent-view
+                                  "insertSubview:atIndex:"
+                                  :pointer (:view node)
+                                  :int64   (long target-idx)))))
+          new-nodes)))))
+
 (defn- reconcile!
   "Reconciles `old-node` with `new-hiccup` under `parent-view`.
+  - Same reference (or same string): returns old-node immediately — zero ObjC calls.
   - Same tag: patches only changed props and reconciles children in-place.
   - Different tag: removes old subtree, builds a fresh one.
   Returns the new rendered-node.
@@ -321,35 +451,41 @@
   `:key` and `:constraints` are stripped from the stored `:props`; constraints
   are not re-applied during reconciliation (they are static at mount time)."
   [parent-view old-node new-hiccup]
-  (let [[new-tag all-new-props new-children]
-        (if (string? new-hiccup)
-          [:label {:text new-hiccup} []]
-          (normalize-hiccup new-hiccup))
-        new-key   (:key all-new-props)
-        new-props (dissoc all-new-props :key :constraints)]
-    (if (not= (:tag old-node) new-tag)
-      (do
-        (objc-rt/msg-send :void (:view old-node) "removeFromSuperview")
-        (release-rendered! old-node)
-        (render-tree! parent-view new-hiccup))
-      (let [view     (:view old-node)
-            old-kids (:children old-node)
-            n-old    (count old-kids)
-            n-new    (count new-children)
-            shared   (min n-old n-new)]
-        (doseq [[k v] new-props]
-          (when (not= v (get (:props old-node) k))
-            (apply-prop! view k v)))
-        (let [reconciled (mapv #(reconcile! view %1 %2)
-                               (take shared old-kids)
-                               (take shared new-children))
-              added      (mapv #(render-tree! view %)
-                               (drop shared new-children))]
-          (doseq [extra (drop shared old-kids)]
-            (objc-rt/msg-send :void (:view extra) "removeFromSuperview")
-            (release-rendered! extra))
-          {:tag new-tag :props new-props :key new-key :view view
-           :rk (:rk old-node) :children (into reconciled added)})))))
+  ;; Layer 1 — subtree identity skip.
+  ;; For vectors: identical? reference means nothing could have changed.
+  ;; For strings: value equality is sufficient (strings are immutable).
+  (if (if (string? new-hiccup)
+        (= new-hiccup (:hiccup old-node))
+        (identical? new-hiccup (:hiccup old-node)))
+    old-node
+    (let [[new-tag all-new-props new-children]
+          (if (string? new-hiccup)
+            [:label {:text new-hiccup} []]
+            (normalize-hiccup new-hiccup))
+          new-key   (:key all-new-props)
+          new-props (dissoc all-new-props :key :constraints)]
+      (if (not= (:tag old-node) new-tag)
+        (do
+          (objc-rt/msg-send :void (:view old-node) "removeFromSuperview")
+          (release-rendered! old-node)
+          (render-tree! parent-view new-hiccup))
+        (let [view     (:view old-node)
+              old-kids (:children old-node)]
+          ;; First pass: apply changed props from new-props.
+          (doseq [[k v] new-props]
+            (when (not= v (get (:props old-node) k))
+              (apply-prop! view k v)))
+          ;; Second pass: reset props that were present in old but absent in new.
+          (doseq [k (keys (:props old-node))]
+            (when-not (contains? new-props k)
+              (let [spec (prop-spec k)]
+                (when (and spec
+                           (not (:no-reconcile spec))
+                           (not= :identity (:special spec)))
+                  (apply-prop! view k (or (:default spec) (f/null-ptr)))))))
+          (let [new-kids (reconcile-children! view old-kids new-children)]
+            {:tag new-tag :props new-props :key new-key :view view
+             :rk (:rk old-node) :children new-kids}))))))
 
 (defn render!
   "Renders `hiccup-tree` as a UIKit subtree under `root-view`.
@@ -364,15 +500,19 @@
 
   Returns `root-view`."
   [root-key root-view hiccup-tree]
-  (if-let [old-node (get @rendered-trees root-key)]
-    (let [new-node (reconcile! root-view old-node hiccup-tree)]
-      (swap! rendered-trees assoc root-key new-node))
+  (if-let [entry (get @rendered-trees root-key)]
+    (let [old-node (if (contains? entry :node) (:node entry) entry)
+          new-node (reconcile! root-view old-node hiccup-tree)]
+      (swap! rendered-trees update root-key
+             (fn [e] (if (contains? e :node)
+                       (assoc e :node new-node)
+                       new-node))))
     (do
       (let [subs (f/nsarray->vec (objc-rt/msg-send :pointer root-view "subviews"))]
         (doseq [sv subs]
           (objc-rt/msg-send :void sv "removeFromSuperview")))
       (let [node (render-tree! root-view hiccup-tree)]
-        (swap! rendered-trees assoc root-key node))))
+        (swap! rendered-trees assoc root-key {:node node :subtrees {}}))))
   root-view)
 
 (defn mount!
@@ -408,12 +548,111 @@
     root-view))
 
 (defn unmount!
-  "Removes all reactive watches for `root-key` and tears down the rendered subtree.
+  "Removes all reactive watches for `root-key` and tears down the rendered subtree,
+  including all subtrees mounted via [[mount-subtree!]].
 
   Safe to call if the key is not currently mounted."
   [root-key]
+  ;; Remove subtree watches.
+  (when-let [entry (get @rendered-trees root-key)]
+    (let [subtrees (when (contains? entry :subtrees) (:subtrees entry))]
+      (doseq [sk (keys subtrees)]
+        (let [compound [root-key sk]]
+          (when-let [watch-pairs (get @mount-watches compound)]
+            (doseq [[a wk] watch-pairs]
+              (remove-watch a wk))
+            (swap! mount-watches dissoc compound))))))
+  ;; Remove root watches.
   (when-let [watch-pairs (get @mount-watches root-key)]
     (doseq [[a wk] watch-pairs]
       (remove-watch a wk))
     (swap! mount-watches dissoc root-key))
   (teardown-rendered! root-key))
+
+(defn memo
+  "Returns a zero-arg render function that caches its last result.
+
+  Re-evaluates `body-fn` and returns a new hiccup tree only when
+  `(= (deps-fn) last-deps)` is false.  When deps have not changed,
+  returns the identical cached reference — enabling [[reconcile!]] to
+  skip the subtree entirely via the Layer 1 identity check.
+
+  - `deps-fn` — zero-arg fn returning a vector of comparable dep values
+  - `body-fn` — zero-arg fn returning a hiccup tree"
+  [deps-fn body-fn]
+  (let [cache (atom {:deps ::unset :hiccup nil})]
+    (fn []
+      (let [new-deps              (deps-fn)
+            {:keys [deps hiccup]} @cache]
+        (if (= deps new-deps)
+          hiccup
+          (let [new-hiccup (body-fn)]
+            (reset! cache {:deps new-deps :hiccup new-hiccup})
+            new-hiccup))))))
+
+(defn mount-subtree!
+  "Like [[mount!]] but scoped to a sub-region of an existing mount.
+
+  Only atoms in `atoms` trigger re-render of this subtree; changes to other
+  atoms watched by the parent mount do not affect it.
+
+  - `root-key`    — the parent mount's root-key (must already exist in rendered-trees)
+  - `subkey`      — unique keyword identifying this subtree within the parent
+  - `parent-view` — UIView to render the subtree into
+  - `atoms`       — sequence of atoms that drive this subtree
+  - `render-fn`   — `(fn [] hiccup-tree)`
+
+  Returns `parent-view`."
+  [root-key subkey parent-view atoms render-fn]
+  (let [compound  [root-key subkey]
+        pending?  (volatile! false)
+        watch-fn  (fn [_ _ _ _]
+                    (when-not @pending?
+                      (vreset! pending? true)
+                      (grease/dispatch-main-async
+                       (fn []
+                         (vreset! pending? false)
+                         (let [entry    (get @rendered-trees root-key)
+                               st-entry (get-in entry [:subtrees subkey])
+                               old-node (:node st-entry)
+                               new-node (if old-node
+                                          (reconcile! parent-view old-node (render-fn))
+                                          (render-tree! parent-view (render-fn)))]
+                           (swap! rendered-trees update root-key
+                                  assoc-in [:subtrees subkey :node] new-node))))))
+        watch-pairs (mapv (fn [a]
+                            (let [wk (gensym "subtree-")]
+                              (add-watch a wk watch-fn)
+                              [a wk]))
+                          atoms)]
+    (swap! mount-watches assoc compound watch-pairs)
+    ;; Ensure root entry exists with subtrees map.
+    (swap! rendered-trees update root-key
+           (fn [e]
+             (if (and e (contains? e :subtrees))
+               e
+               {:node e :subtrees {}})))
+    (swap! rendered-trees assoc-in [root-key :subtrees subkey]
+           {:node nil :parent-view parent-view})
+    (grease/dispatch-main-async
+     #(let [new-node (render-tree! parent-view (render-fn))]
+        (swap! rendered-trees assoc-in [root-key :subtrees subkey]
+               {:node new-node :parent-view parent-view})))
+    parent-view))
+
+(defn unmount-subtree!
+  "Removes watches and tears down the rendered subtree for `[root-key subkey]`.
+
+  Safe to call if the subtree is not mounted."
+  [root-key subkey]
+  (let [compound [root-key subkey]]
+    (when-let [watch-pairs (get @mount-watches compound)]
+      (doseq [[a wk] watch-pairs]
+        (remove-watch a wk))
+      (swap! mount-watches dissoc compound))
+    (when-let [st-entry (get-in @rendered-trees [root-key :subtrees subkey])]
+      (when-let [st-node (:node st-entry)]
+        (when (:view st-node)
+          (objc-rt/msg-send :void (:view st-node) "removeFromSuperview"))
+        (release-rendered! st-node))
+      (swap! rendered-trees update root-key update :subtrees dissoc subkey))))

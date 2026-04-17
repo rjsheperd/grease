@@ -10,28 +10,28 @@
 
  :props
  ;; ── Color / appearance ──────────────────────────────────────────────────────
- {:bg           {:sel "setBackgroundColor:"  :coerce :ui-color}
-  :tint         {:sel "setTintColor:"        :coerce :ui-color}
-  :text-color   {:sel "setTextColor:"        :coerce :ui-color}
+ {:bg           {:sel "setBackgroundColor:"  :coerce :ui-color  :default nil}
+  :tint         {:sel "setTintColor:"        :coerce :ui-color  :default nil}
+  :text-color   {:sel "setTextColor:"        :coerce :ui-color  :default nil}
 
   ;; ── Text content ────────────────────────────────────────────────────────────
-  :text         {:sel "setText:"             :coerce :ns-string}
-  :placeholder  {:sel "setPlaceholder:"      :coerce :ns-string}
-  :font         {:sel "setFont:"             :coerce :ui-font}
+  :text         {:sel "setText:"             :coerce :ns-string :default nil}
+  :placeholder  {:sel "setPlaceholder:"      :coerce :ns-string :default nil}
+  :font         {:sel "setFont:"             :coerce :ui-font   :default nil}
   :align        {:sel "setTextAlignment:"    :arg-type :int64}
   :lines        {:sel "setNumberOfLines:"    :arg-type :int64}
 
   ;; ── Layout ──────────────────────────────────────────────────────────────────
   :frame        {:special :set-frame}
-  :hidden       {:sel "setHidden:"           :arg-type :int64}
-  :alpha        {:sel "setAlpha:"            :arg-type :float64}
-  :clip         {:sel "setClipsToBounds:"    :arg-type :int64}
+  :hidden       {:sel "setHidden:"           :arg-type :int64   :default 0}
+  :alpha        {:sel "setAlpha:"            :arg-type :float64 :default 1.0}
+  :clip         {:sel "setClipsToBounds:"    :arg-type :int64   :default 0}
   :content-mode {:sel "setContentMode:"      :arg-type :int64}
 
   ;; ── Layer (CALayer) ─────────────────────────────────────────────────────────
-  :corner       {:target :layer :sel "setCornerRadius:"  :arg-type :float64}
-  :border-width {:target :layer :sel "setBorderWidth:"   :arg-type :float64}
-  :border-color {:target :layer :sel "setBorderColor:"   :coerce :cg-color}
+  :corner       {:target :layer :sel "setCornerRadius:"  :arg-type :float64 :default 0.0}
+  :border-width {:target :layer :sel "setBorderWidth:"   :arg-type :float64 :default 0.0}
+  :border-color {:target :layer :sel "setBorderColor:"   :coerce :cg-color  :default nil}
 
   ;; ── UIStackView ─────────────────────────────────────────────────────────────
   :axis         {:sel "setAxis:"             :arg-type :int64}
@@ -39,11 +39,14 @@
 
   ;; ── Control events ──────────────────────────────────────────────────────────
   ;; UIControlEventTouchUpInside = 1<<6 = 64
-  :on-tap       {:control-event 64}
+  :on-tap       {:control-event 64   :no-reconcile true}
   ;; UIControlEventValueChanged = 1<<12 = 4096
-  :on-change    {:control-event 4096}
+  :on-change    {:control-event 4096 :no-reconcile true}
   ;; UIControlEventEditingChanged = 1<<16 = 65536
-  :on-edit      {:control-event 65536}
+  :on-edit      {:control-event 65536 :no-reconcile true}
+
+  ;; ── UIImageView ─────────────────────────────────────────────────────────────
+  :image        {:sel "setImage:"            :default nil}
 
   ;; ── Tree-level metadata (handled by render-tree!, not apply-prop!) ──────────
   ;; :key         — symbolic name for referencing this view from :constraints
