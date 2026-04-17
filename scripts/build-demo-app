@@ -173,10 +173,21 @@ OTHER_LDFLAGS+=" -Wl,-framework,MapKit"
 # libffi — bundled with the Xcode project at aarch64-apple-ios/.libs/libffi.a
 LIBFFI_DIR="$XCODE_PROJECT/../aarch64-apple-ios/.libs"
 
+# GSL — cross-compiled for arm64-apple-ios, installed at aarch64-apple-ios/gsl/
+GSL_DIR="$XCODE_PROJECT/../aarch64-apple-ios/gsl/lib"
+GSL_INC="$XCODE_PROJECT/../aarch64-apple-ios/gsl/include"
+if [ -d "$GSL_DIR" ]; then
+    OTHER_LDFLAGS+=" -lgsl -lgslcblas"
+fi
+
+# src/cbridge — shared C bridge headers (GSL.h, Bridge.h canonical copies)
+CBRIDGE_INC="$PROJECT_DIR/src/cbridge"
+
 # Search order:
 #   1. LOCAL_LIBS_DIR — iOS-tagged libjava.a / libjvm.a / libios_jdk_stubs.a
 #   2. GREASE_IOS_STATIC — iOS-tagged libzip.a / libprefs.a / libj2pkcs11.a
 #   3. LIBFFI_DIR — iOS-tagged libffi.a (platform 2, for -lffi in OTHER_LDFLAGS)
+#   4. GSL_DIR — iOS-tagged libgsl.a / libgslcblas.a
 # ios-graal-jdk-21/static is intentionally excluded — those libs are macOS-tagged
 # and would cause "building for iOS, but linking in object built for macOS" errors.
 OTHER_LDFLAGS+=" -L$LOCAL_LIBS_DIR"
@@ -185,6 +196,9 @@ if [ -d "$GREASE_IOS_STATIC" ]; then
 fi
 if [ -d "$LIBFFI_DIR" ]; then
     OTHER_LDFLAGS+=" -L$LIBFFI_DIR"
+fi
+if [ -d "$GSL_DIR" ]; then
+    OTHER_LDFLAGS+=" -L$GSL_DIR"
 fi
 
 cat > "$XCCONFIG" << EOF
@@ -196,9 +210,9 @@ IPHONEOS_DEPLOYMENT_TARGET = $IOS_TARGET
 CC = $XCODE14_CLANG
 CXX = ${XCODE14_CLANG}++
 
-LIBRARY_SEARCH_PATHS = $LOCAL_LIBS_DIR $GREASE_IOS_STATIC $BB_DIR $LIBFFI_DIR
+LIBRARY_SEARCH_PATHS = $LOCAL_LIBS_DIR $GREASE_IOS_STATIC $BB_DIR $LIBFFI_DIR $GSL_DIR
 
-HEADER_SEARCH_PATHS = \$(inherited) $BB_DIR
+HEADER_SEARCH_PATHS = \$(inherited) $BB_DIR $GSL_INC $CBRIDGE_INC
 
 OTHER_LDFLAGS = $OTHER_LDFLAGS
 

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# new-app — instantiate a new grease iOS app from AppTemplate
+#
+# Usage:
+#   ./scripts/new-app MyApp
+#
+# Creates xcode/MyApp/MyApp.xcodeproj from xcode/AppTemplate/.
+# After running, adapt scripts/build-demo-app to point at the new project,
+# or add an APP env var override mechanism to that script.
+
+set -euo pipefail
+
+APP_NAME="${1:?Usage: $0 <AppName>}"
+TEMPLATE_DIR="xcode/AppTemplate"
+DEST_DIR="xcode/$APP_NAME"
+
+if [ -e "$DEST_DIR" ]; then
+  echo "Error: $DEST_DIR already exists"
+  exit 1
+fi
+
+if [ ! -d "$TEMPLATE_DIR" ]; then
+  echo "Error: $TEMPLATE_DIR not found — run from repo root"
+  exit 1
+fi
+
+echo "=== Creating $APP_NAME from AppTemplate ==="
+
+# Copy template (exclude any stale build artifacts)
+rsync -a \
+  --exclude='aarch64-apple-ios/' \
+  --exclude='graalvm' \
+  --exclude='staticjdk' \
+  --exclude='*.xcuserstate' \
+  --exclude='xcuserdata/' \
+  --exclude='.DS_Store' \
+  "$TEMPLATE_DIR/" "$DEST_DIR/"
+
+# Rename top-level directories
+mv "$DEST_DIR/AppTemplate"         "$DEST_DIR/$APP_NAME"
+mv "$DEST_DIR/AppTemplate.xcodeproj" "$DEST_DIR/$APP_NAME.xcodeproj"
+mv "$DEST_DIR/AppTemplateTests"    "$DEST_DIR/${APP_NAME}Tests"
+mv "$DEST_DIR/AppTemplateUITests"  "$DEST_DIR/${APP_NAME}UITests"
+
+# Substitute AppTemplate → APP_NAME in all text files
+LC_ALL=C find "$DEST_DIR" -type f \
+  ! -name "*.png" ! -name "*.pdf" ! -name "*.a" ! -name "*.o" \
+  -exec sed -i '' "s/AppTemplate/$APP_NAME/g" {} +
+
+# Update bundle ID
+/usr/libexec/PlistBuddy \
+  -c "Set :CFBundleIdentifier com.example.$APP_NAME" \
+  "$DEST_DIR/$APP_NAME/Info.plist" 2>/dev/null || true
+
+echo ""
+echo "  Created: $DEST_DIR/$APP_NAME.xcodeproj"
+echo ""
+echo "  Next steps:"
+echo "    1. Update scripts/build-demo-app — change XCODE_PROJECT to point at"
+echo "       \$PROJECT_DIR/$DEST_DIR/$APP_NAME.xcodeproj"
+echo "    2. Write your Clojure entry point in dev/<app_name>.clj"
+echo "    3. Run: direnv exec . ./scripts/build-demo-app"
