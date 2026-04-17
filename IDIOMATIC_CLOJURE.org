@@ -463,7 +463,7 @@ error delivery.
 :loc: ~250
 :END:
 
-** TODO 8.1 Macro shape
+** DONE 8.1 Macro shape
 
 #+begin_src clojure
 (defscreen TodoList
@@ -490,7 +490,7 @@ error delivery.
        ^{:key (:id item)} [:label {:text (:title item)}])]))
 #+end_src
 
-** TODO 8.2 ~(present! screen-name)~ / ~(dismiss! screen-name)~
+** DONE 8.2 ~(present! screen-name)~ / ~(dismiss! screen-name)~
 
 - ~present!~: create agent from ~:state~; create delegates; set up KVO; call ~:on-mount~;
   mount ~:view~ with reactive bindings (~mount!~ from Phase 4.3). Tag all retained

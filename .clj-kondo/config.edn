@@ -5,4 +5,6 @@
            ;; with-retained uses let-style bindings as its first arg
            grease.ios.foundation/with-retained  clojure.core/let
            ;; let-completion uses let-style bindings (first or second arg)
-           grease.ios.completion/let-completion clojure.core/let}}
+           grease.ios.completion/let-completion clojure.core/let
+           ;; defscreen defines a var named after its first arg
+           grease.ios.screen/defscreen          clojure.core/def}}
