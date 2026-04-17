@@ -85,7 +85,7 @@ Tests: retain/release round-trip; ~release-kind!~ selectivity; double-release is
 The hex parser is pure Clojure; testable on JVM. Keyword dispatch calls ~msg-send~;
 tag those tests ~^:integration~.
 
-** TODO 0.3 UIFont Coercion
+** DONE 0.3 UIFont Coercion
 :PROPERTIES:
 :file: src/grease/ios/font.clj
 :loc: ~50
