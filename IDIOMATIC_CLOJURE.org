@@ -69,7 +69,7 @@ ObjC objects prolifically; a single centralised table scales better.
 
 Tests: retain/release round-trip; ~release-kind!~ selectivity; double-release is no-op.
 
-** TODO 0.2 UIColor Coercion
+** DONE 0.2 UIColor Coercion
 :PROPERTIES:
 :file: src/grease/ios/color.clj
 :loc: ~80 + EDN
