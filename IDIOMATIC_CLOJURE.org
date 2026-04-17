@@ -1,0 +1,548 @@
+#+TITLE: Grease Idiom Layer
+#+AUTHOR: RJ Sheperd
+#+STARTUP: overview
+
+* Preamble
+
+The low-level engine gives you ~(ios/call obj :method args)~. Faithful and correct, but
+verbose for anything beyond exploratory REPL work. This layer maps every recurring iOS
+pattern to the Clojure idiom that already solves the same problem.
+
+| iOS pattern                            | Clojure idiom                  | Why                                                         |
+|----------------------------------------+--------------------------------+-------------------------------------------------------------|
+| Delegate + mutable state               | ~agent~                        | Serialised async state from off-thread callbacks            |
+| KVO observation                        | ~add-watch~ on a synthetic ref | Same contract: notify on state change                       |
+| View tree built with ~addSubview:~     | Hiccup vectors                 | Declarative tree → imperative mutations (Reagent's pattern) |
+| Completion handler ~(result, error)~   | ~promise~ + ~deref~ + timeout  | One-shot async result delivery                              |
+| NSNotificationCenter                   | Multimethod event bus          | Pub/sub with keyword dispatch keys                          |
+| Auto Layout constraints                | Constraint EDN                 | Relationships between named views as data                   |
+| UIView animation blocks                | Threading macro                | Record-then-execute, composable sequences                   |
+| ~@autoreleasepool { }~                 | ~with-open~-shaped macro       | Scoped resource cleanup                                     |
+| Target/action for controls             | ~:on-tap~ keyword in hiccup    | Event handler as data                                       |
+
+Every layer exposes the one below. Users who dislike hiccup can call ~(ios/call ...)~;
+users who dislike ~defdelegate~ can call ~(objc-rt/defclass ...)~. No escape hatches
+needed because the abstractions do not hide their foundation.
+
+** What already exists
+
+The foundation is complete. New work begins at Phase 0.
+
+| Component                        | File                           | Status |
+|----------------------------------+--------------------------------+--------|
+| ObjC runtime (defclass, msg-send)| ~grease/ios/objc.clj~          | ✓      |
+| Foundation type coercions        | ~grease/ios/foundation.clj~    | ✓      |
+| Block factories (void/data/ptr)  | ~grease/ios/blocks.clj~        | ✓      |
+| UIKit low-level helpers          | ~grease/ios/uikit.clj~         | ✓      |
+| Bluetooth wrapper                | ~grease/ios/bluetooth.clj~     | ✓      |
+| Camera / AVCapture wrapper       | ~grease/ios/camera.clj~        | ✓      |
+| Data-driven engine (~ios/call~)  | ~grease/ios/api.clj~ + support | ✓      |
+| HTTP load-file from nREPL        | ~grease.clj~ ~sci/intern~      | ✓      |
+| App shell / store (dev)          | ~dev/shell.clj~, ~appstore.clj~| ✓      |
+
+** SCI compatibility constraints (apply to every phase)
+
+- No nested backticks. Compute inner forms with ~mapv~ outside the outer backtick.
+- All symbols inside syntax-quote must be fully qualified.
+- No ~core.async~. Use ~promise~ and ~add-watch~.
+- No ~clojure.spec.alpha~ runtime calls.
+- No ~requiring-resolve~ in hot paths; cache results in atoms.
+- Custom types (~IDeref~, ~IRef~) must work under SCI — test early; fall back to maps +
+  functions if ~deftype~-with-protocol is unsupported.
+
+* Phase 0: Foundations
+** DONE 0.1 Retention Registry
+:PROPERTIES:
+:file: src/grease/ios/retain.clj
+:loc: ~60
+:END:
+
+Every existing wrapper manages ARC retention with ad-hoc atoms. The idiom layer creates
+ObjC objects prolifically; a single centralised table scales better.
+
+- ~(retain! key ptr kind)~ — store ptr under key; return key
+- ~(release! key)~ — remove from table, return ptr (caller sends final messages first)
+- ~(release-kind! kind)~ — bulk teardown (e.g. all ~:delegate~ entries for one screen)
+- ~(retained key)~ — lookup, nil if absent
+- ~(retained-keys)~ / ~(retained-count)~ — REPL introspection
+- ~(reset-all!)~ — emergency escape hatch
+
+Tests: retain/release round-trip; ~release-kind!~ selectivity; double-release is no-op.
+
+** TODO 0.2 UIColor Coercion
+:PROPERTIES:
+:file: src/grease/ios/color.clj
+:loc: ~80 + EDN
+:END:
+
+~(->uicolor spec)~ where spec is one of:
+- Keyword — ~:white :black :red :label :system-background :separator~ … maps to UIColor
+  class methods via ~resources/grease/colors.edn~
+- Vector — ~[r g b]~ or ~[r g b a]~, values 0.0–1.0
+- Hex string — ~"#FF5733"~ or ~"#FF5733AA"~
+- Pointer — returned as-is (idempotent)
+
+The hex parser is pure Clojure; testable on JVM. Keyword dispatch calls ~msg-send~;
+tag those tests ~^:integration~.
+
+** TODO 0.3 UIFont Coercion
+:PROPERTIES:
+:file: src/grease/ios/font.clj
+:loc: ~50
+:END:
+
+~(->uifont spec)~ where spec is one of:
+- Number — ~16~ → system font size 16
+- Vector — ~[:system 16]~, ~[:system-bold 16]~, ~[:monospaced 14]~, ~["Helvetica Neue" 14]~
+- Pointer — returned as-is
+
+Selector map (inlined, not EDN):
+#+begin_src clojure
+{:system      "systemFontOfSize:"
+ :system-bold "boldSystemFontOfSize:"
+ :monospaced  "monospacedSystemFontOfSize:weight:"}
+#+end_src
+
+** TODO 0.4 ~with-autorelease~
+:PROPERTIES:
+:file: src/grease/ios/foundation.clj (append)
+:loc: ~15
+:END:
+
+#+begin_src clojure
+(defmacro with-autorelease [& body]
+  `(let [pool# (com.phronemophobic.clj-libffi/call
+                 "objc_autoreleasePoolPush" :pointer)]
+     (try ~@body
+       (finally
+         (com.phronemophobic.clj-libffi/call
+           "objc_autoreleasePoolPop" :void :pointer pool#)))))
+#+end_src
+
+Integration test: create 1000 NSStrings inside the macro, verify no crash.
+
+** TODO 0.5 ~with-retained~
+:PROPERTIES:
+:file: src/grease/ios/foundation.clj (append)
+:loc: ~30
+:END:
+
+~with-open~ analog — retain each binding in the registry, execute body, release all in
+~finally~:
+
+#+begin_src clojure
+(with-retained [mgr  (make-location-manager)
+                dlg  (make-delegate)]
+  (wire-and-start! mgr dlg))
+#+end_src
+
+Tests: release fires on normal exit and on exception.
+
+* Phase 1: Delegates as Agents
+:PROPERTIES:
+:file: src/grease/ios/delegate.clj
+:depends: Phase 0.1
+:loc: ~200 impl + ~150 tests
+:END:
+
+** TODO 1.1 ~defdelegate~ macro
+
+Input shape:
+#+begin_src clojure
+(defdelegate LocationDelegate "CLLocationManagerDelegate"
+  {:state   {:location nil :error nil}
+   :methods {[:location-manager _ :did-update-locations locs]
+             (fn [state _mgr locs]
+               (assoc state :location (first-location locs)))}})
+#+end_src
+
+- Method descriptor ~[:location-manager _ :did-update-locations locs]~ → selector
+  ~"locationManager:didUpdateLocations:"~
+- State-transition fn signature: ~(fn [current-state & coerced-objc-args] -> new-state)~
+- Expansion creates a factory function ~def~'d as ~LocationDelegate~ in the calling ns
+
+** TODO 1.2 Selector reconstruction
+
+~[:location-manager _ :did-update-locations _]~ → ~"locationManager:didUpdateLocations:"~
+
+Pure function; testable on JVM. Build a translation table from all selectors used in
+existing wrappers and assert each reconstructs correctly.
+
+** TODO 1.3 Type-encoding
+
+v1: require explicit ~:encoding "v@:@@"~ in the method descriptor.
+v2 (post-engine): look up from framework spec EDN.
+
+** TODO 1.4 Macro expansion
+
+- Factory returns a Clojure ~agent~ wrapping ~:state~
+- Agent metadata holds ~{::objc-ptr <ptr> ::protocol <name>}~
+- Each ObjC method IMP calls ~(send agent transition-fn & coerced-args)~
+- Delegate pointer retained in registry (Phase 0.1)
+
+** TODO 1.5 ~objc-ptr~ / ~release-delegate!~
+
+- ~(objc-ptr agent)~ — extract ObjC pointer from agent metadata
+- ~(release-delegate! agent)~ — remove from retention registry
+
+** TODO 1.6 Error handling
+
+Wrap every transition in ~try/catch~, log the error, return previous state unchanged
+(store last error under ~::last-error~ in state). Avoids silent callback drops.
+
+** TODO 1.7 Protocol conformance
+
+After ~defclass!~, call ~(objc-rt/add-protocol! cls protocol-name)~ so
+~conformsToProtocol:~ checks pass.
+
+** TODO 1.8 Tests
+
+Oracle test: rewrite ~bluetooth.clj~ delegate with ~defdelegate~; assert ~@bt-delegate~
+produces identical state transitions.
+
+* Phase 2: KVO as ~add-watch~
+:PROPERTIES:
+:file: src/grease/ios/kvo.clj
+:depends: Phase 0.1
+:loc: ~180 impl + ~100 tests
+:END:
+
+~addObserver:forKeyPath:options:context:~ / ~removeObserver:forKeyPath:~ are pure
+~msg-send~ calls — no struct shims needed.
+
+** TODO 2.1 Internal observer class
+
+~defclass!~ a ~GreaseKVOObserver~ once at module load with method
+~observeValueForKeyPath:ofObject:change:context:~ (~"v@:@@@@"~). Its IMP dispatches
+to a Clojure dispatch table atom ~{context-id → callback-fn}~.
+
+Context IDs: a global counter atom (simplest; no pointer fragility).
+
+** TODO 2.2 ~(observe obj key-path)~
+
+Returns a value implementing ~IDeref~ and ~IRef~ (~add-watch~ / ~remove-watch~).
+
+On creation:
+1. Allocate unique context ID
+2. Register ~context-id → update-atom~ in dispatch table
+3. ~addObserver:forKeyPath:options:context:~ (options = ~3~: new + old)
+4. Retain in registry
+
+~deref~ returns current value. ~add-watch~ / ~remove-watch~ delegate to the internal atom.
+
+** TODO 2.3 ~(release! observable)~
+
+- ~removeObserver:forKeyPath:~ on original object
+- Remove from dispatch table and retention registry
+- Notify all watches with ~nil~ (signals observation ended)
+
+** TODO 2.4 ~(reaction expr-fn & observables)~
+
+Derived ref: re-evaluates ~expr-fn~ whenever any input changes; only fires watches when
+the *derived* value changes.
+
+** TODO 2.5 Tests
+
+JVM: simulate KVO notification via direct dispatch-table call; verify ~deref~ and
+~add-watch~ fire. Integration: observe UIView ~alpha~ property, change it, verify
+callback fires (~^:integration~).
+
+* Phase 3: Notifications as Event Bus
+:PROPERTIES:
+:file: src/grease/ios/notify.clj
+:depends: Phase 0.1
+:loc: ~120 impl + EDN
+:END:
+
+** TODO 3.1 Notification name registry (~resources/grease/notifications.edn~)
+
+#+begin_src clojure
+{:keyboard-will-show
+ {:objc "UIKeyboardWillShowNotification"
+  :user-info {:frame-end {:key "UIKeyboardFrameEndUserInfoKey" :coerce :cg-rect}
+              :duration  {:key "UIKeyboardAnimationDurationUserInfoKey" :coerce :double}}}
+ :app-did-enter-background
+ {:objc "UIApplicationDidEnterBackgroundNotification" :user-info {}}
+ ;; …
+ }
+#+end_src
+
+** TODO 3.2 Internal observer
+
+~defclass!~ a ~GreaseNotificationObserver~ with ~handleNotification:~ (~"v@:@"~) once
+at module load. Dispatches to a table atom ~{notification-name → [callback ...]}~.
+
+** TODO 3.3 ~(on notification-key callback-fn)~
+
+Register callback; if first subscriber, wire internal observer via
+~NSNotificationCenter addObserver:selector:name:object:~. Return subscription handle.
+
+** TODO 3.4 ~(off handle)~ / ~(once notification-key callback-fn)~
+
+~off~: remove callback; if last subscriber, call ~removeObserver:name:object:~.
+~once~: auto-~off~ after first invocation.
+
+* Phase 4: Hiccup for UIKit
+:PROPERTIES:
+:depends: Phase 0.2, Phase 0.3
+:END:
+
+** TODO 4.1 Tag registry and element creation
+:PROPERTIES:
+:file: src/grease/ios/hiccup.clj + resources/grease/hiccup.edn
+:loc: ~300 impl + ~100 EDN
+:END:
+
+Tag registry excerpt:
+#+begin_src clojure
+{:tags
+ {:label  {:class "UILabel"}
+  :button {:class "UIButton" :factory "buttonWithType:" :factory-arg 0}
+  :stack  {:class "UIStackView"}
+  :scroll {:class "UIScrollView"}
+  ;; …
+  }
+ :props
+ {:bg     {:sel "setBackgroundColor:" :coerce :ui-color}
+  :text   {:sel "setText:"           :coerce :ns-string}
+  :font   {:sel "setFont:"           :coerce :ui-font}
+  :frame  {:special :set-frame}
+  :corner {:sel "setCornerRadius:"   :target :layer :arg-type :float64}
+  :on-tap {:control-event 64}
+  ;; …
+  }}
+#+end_src
+
+~(create-element tag props)~: look up tag, create via factory or ~new~, apply each prop
+(coerce value, call ~msg-send~; handle ~:special~ and ~:target :layer~ cases; wire
+event handlers via target-action dispatch table). Retain view in registry.
+
+** TODO 4.2 Naive reconciler
+
+~(render! root-key hiccup-vec)~: first call renders fresh; subsequent calls tear down
+old tree, render new one. All UIKit work on main thread via ~dispatch-main-async~.
+
+** TODO 4.3 Smart reconciler + reactive bindings
+:PROPERTIES:
+:depends: Phase 2
+:END:
+
+Tree diff: same tag + key → patch props, recurse children. Different tag → rebuild.
+Reordered children (by key) → ~insertSubview:atIndex:~.
+
+~(mount! root-key [atom ...] render-fn)~: explicit dependency declaration (v1 — avoids
+rebinding ~deref~ under SCI). Install ~add-watch~ on each declared atom. On change:
+debounce to one render per animation frame, apply diff patch.
+
+* Phase 5: Animations
+:PROPERTIES:
+:file: src/grease/ios/anim.clj
+:depends: Phase 4 (optional — animations work standalone)
+:loc: ~150 Clojure
+:END:
+
+~UIView animateWithDuration:animations:completion:~ and the spring variant take block
+arguments. Both are wrappable via the existing ~make-void-block~ factory — *no new C
+shims required*.
+
+** TODO 5.1 ~(animate opts body-fn)~
+
+#+begin_src clojure
+(animate {:duration 0.3 :curve :ease-in-out}
+  (fn []
+    (set-alpha! view 0.0)
+    (set-frame! view [0 100 300 44])))
+#+end_src
+
+Wrap ~body-fn~ in a void block; call
+~UIView animateWithDuration:delay:options:animations:completion:~ via ~msg-send~.
+Return promise resolving when completion block fires.
+
+** TODO 5.2 ~(spring opts body-fn)~
+
+~{:duration 0.5 :damping 0.7 :velocity 1.0}~. Uses
+~animateWithDuration:delay:usingSpringWithDamping:…~.
+
+** TODO 5.3 ~(sequence & [opts fn] ...)~
+
+Chain animations: completion of N starts N+1. Return promise for final completion.
+
+** TODO 5.4 ~anim->~ threading macro
+
+#+begin_src clojure
+(animate {:duration 0.3}
+  (anim-> view
+    (alpha 0.5)
+    (frame [0 100 300 44])
+    (bg :red)))
+#+end_src
+
+Expands to a ~fn []~ body calling ~set-alpha!~, ~set-frame!~, ~set-background-color!~.
+
+** TODO 5.5 Curve keyword → options integer
+
+#+begin_src clojure
+{:ease-in-out  0x00000000
+ :ease-in      0x00010000
+ :ease-out     0x00020000
+ :linear       0x00030000}
+#+end_src
+
+* Phase 6: Layout as Data
+:PROPERTIES:
+:file: src/grease/ios/layout.clj
+:depends: Phase 4
+:loc: ~200
+:END:
+
+~NSLayoutConstraint constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:~
+is a pure ~msg-send~ — no struct shims needed.
+
+** TODO 6.1 ~(constrain! parent constraint-forms)~
+
+#+begin_src clojure
+(constrain! root
+  [(= (:top header)   (:bottom nav-bar) 8)
+   (= (:leading body) (:leading :safe)  0)
+   (= (:width body)   (:width :parent)  0)])
+#+end_src
+
+Attribute keyword → ~NSLayoutAttribute~ integer:
+#+begin_src clojure
+{:left 1 :right 2 :top 3 :bottom 4 :leading 5 :trailing 6
+ :width 7 :height 8 :center-x 9 :center-y 10}
+#+end_src
+
+For each form: compile to ~NSLayoutConstraint~, activate via ~setActive: 1~.
+Set ~translatesAutoresizingMaskIntoConstraints = NO~ on every constrained view.
+
+** TODO 6.2 Safe area insets
+
+~safeAreaInsets~ returns a ~UIEdgeInsets~ struct. Access via ~ffi/call-ptr~ on the
+existing uikit struct helpers rather than adding C shims.
+
+** TODO 6.3 Hiccup integration
+
+~:constraints~ prop on a container: after rendering children, call ~constrain!~.
+On re-render: deactivate old constraints, activate new ones.
+
+* Phase 7: Completion Handlers as Promises
+:PROPERTIES:
+:file: src/grease/ios/completion.clj
+:depends: grease/ios/blocks.clj (already exists)
+:loc: ~100
+:END:
+
+** TODO 7.1 ~(with-completion block-type)~
+
+Returns ~[block-ptr promise]~. When iOS invokes the block, delivers the coerced result
+to the promise. Block pointer retained automatically.
+
+Types: ~:void~, ~:data~, ~:bool-error~ (matching existing block factories).
+
+** TODO 7.2 ~let-completion~ macro
+
+#+begin_src clojure
+(let-completion [data (fetch-url! "https://…")
+                 ok?  (request-auth! :video)]
+  (process data ok?))
+#+end_src
+
+Expands to nested ~let~ + ~deref~ with timeout (default 30 s). Throws on timeout or
+error delivery.
+
+** TODO 7.3 Common wrappers
+
+- ~(fetch-url! url)~ → promise of ~{:data … :response … :error …}~
+- ~(request-authorization! media-type)~ → promise of boolean
+
+* Phase 8: ~defscreen~
+:PROPERTIES:
+:file: src/grease/ios/screen.clj
+:depends: Phase 1 (delegates), Phase 2 (KVO), Phase 4 (hiccup)
+:loc: ~250
+:END:
+
+** TODO 8.1 Macro shape
+
+#+begin_src clojure
+(defscreen TodoList
+  :state   {:items [] :filter :all}
+
+  :delegates
+  {:sync (defdelegate :inline "SyncDelegate"
+           {[:sync-did-complete _ :items items]
+            (fn [state _ items] (assoc state :items items))})}
+
+  :on-mount
+  (fn [{:keys [state delegates]}]
+    (start-sync! (:sync delegates))
+    {:sync (:sync delegates)})
+
+  :on-unmount
+  (fn [{:keys [resources]}]
+    (stop-sync! (:sync resources)))
+
+  :view
+  (fn [{:keys [state]}]
+    [:stack {:axis :vertical}
+     (for [item (:items state)]
+       ^{:key (:id item)} [:label {:text (:title item)}])]))
+#+end_src
+
+** TODO 8.2 ~(present! screen-name)~ / ~(dismiss! screen-name)~
+
+- ~present!~: create agent from ~:state~; create delegates; set up KVO; call ~:on-mount~;
+  mount ~:view~ with reactive bindings (~mount!~ from Phase 4.3). Tag all retained
+  objects with the screen key.
+- ~dismiss!~: call ~:on-unmount~; ~release-kind!~ screen key for bulk cleanup; tear
+  down view tree.
+
+* Dependency Graph
+
+#+begin_src
+Phase 0.1 (retain)
+  │
+  ├──► Phase 1 (delegates/agents)
+  ├──► Phase 2 (KVO/add-watch)
+  └──► Phase 3 (notifications)
+
+Phase 0.2 (color) ─┐
+Phase 0.3 (font)  ─┤
+                   ▼
+             Phase 4.1 (hiccup elements)
+                   │
+             Phase 4.2 (naive reconciler)
+                   │
+             Phase 4.3 (smart reconciler)  ◄── Phase 2
+                   │
+             Phase 5 (animations)  ← no new C shims needed
+                   │
+             Phase 6 (layout)      ← no new C shims needed
+                   │
+Phase 7 (completion) ─── standalone, depends only on blocks.clj
+                   │
+             Phase 8 (defscreen)   ◄── Phases 1, 2, 4
+#+end_src
+
+Critical path: *0.1 → 0.2 + 0.3 → 4.1 → 4.2 → 4.3*
+
+Phases 5 and 6 no longer require a C shim batch rebuild. Struct access goes through
+~ffi/call-ptr~ (see recent commits removing Bridge.m struct shims). All phases can now
+start in the fast loop.
+
+* Timeline
+
+| Phase     | Work                          | Notes                          |
+|-----------+-------------------------------+--------------------------------|
+| 0.1–0.5   | Foundations                   | 1 day                          |
+| 1         | Delegates as agents           | 1 day                          |
+| 2         | KVO as add-watch              | 1 day                          |
+| 3         | Notifications                 | ½ day                          |
+| 4.1–4.2   | Hiccup + naive reconciler     | 1.5 days                       |
+| 4.3       | Smart reconciler + reactive   | 1.5 days                       |
+| 5         | Animations                    | 1 day                          |
+| 6         | Layout                        | 1 day                          |
+| 7         | Completion handlers           | ½ day                          |
+| 8         | defscreen                     | 1 day                          |
+|           | *Total*                       | *~10 days + 3–4 for debugging* |
