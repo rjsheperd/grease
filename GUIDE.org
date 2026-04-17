@@ -1,0 +1,1156 @@
+#+TITLE: grease — Idiomatic Clojure iOS Interface Guide
+#+AUTHOR: grease project
+#+OPTIONS: toc:3 num:t
+
+This guide covers every layer of the idiomatic Clojure interface exposed
+by grease: low-level ObjC interop, memory management, Hiccup rendering,
+reactive screens, navigation, layout, animation, KVO, delegates, blocks,
+and the high-level data-driven engine.
+
+All code runs inside the live SCI nREPL on device (port 23456).  The
+nREPL thread is a background thread — any call that touches UIKit state
+must be wrapped with ~on-main~ (see [[*REPL Helpers]]).
+
+* Table of Contents
+- [[*Prerequisites]]
+- [[*ObjC Interop]]
+- [[*Foundation Type Conversions]]
+- [[*Memory Management]]
+- [[*REPL Helpers]]
+- [[*Hiccup UI Rendering]]
+- [[*Screen Lifecycle]]
+- [[*Navigation]]
+- [[*UIKit Utilities]]
+- [[*Colors]]
+- [[*Fonts]]
+- [[*Layout Constraints]]
+- [[*Animations]]
+- [[*KVO Observations]]
+- [[*Delegates]]
+- [[*Blocks and Completion Handlers]]
+- [[*NSNotificationCenter]]
+- [[*System Services (Bluetooth, Camera)]]
+- [[*Data-Driven Engine (api.clj)]]
+- [[*Namespace Quick Reference]]
+
+* Prerequisites
+
+Connect to the device nREPL before evaluating any of the snippets below:
+
+#+begin_src clojure
+clj -Sdeps '{"deps" {"nrepl/nrepl" {"mvn/version" "1.3.0"}}}' \
+  -M -m nrepl.cmdline --connect --host 192.168.0.111 --port 23456
+#+end_src
+
+Standard namespace aliases used throughout this guide:
+
+#+begin_src clojure
+(require '[grease.ios.objc       :as objc-rt])
+(require '[grease.ios.foundation :as f])
+(require '[grease.ios.repl       :refer [on-main]])
+(require '[grease.ios.uikit      :as ui])
+(require '[grease.ios.hiccup     :as hiccup])
+(require '[grease.ios.screen     :as screen])
+(require '[grease.ios.nav        :as nav])
+(require '[grease.ios.color      :as color])
+(require '[grease.ios.font       :as font])
+(require '[grease.ios.layout     :as layout])
+(require '[grease.ios.anim       :as anim])
+(require '[grease.ios.kvo        :as kvo])
+(require '[grease.ios.delegate   :as delegate])
+(require '[grease.ios.blocks     :as blk])
+(require '[grease.ios.retain     :as retain])
+(require '[com.phronemophobic.grease :as grease])
+#+end_src
+
+* ObjC Interop
+
+** Sending Messages (~msg-send~)
+
+~grease.ios.objc/msg-send~ sends an ObjC message and returns a typed value.
+Use it instead of the ~objc~ macro: SCI's reader rejects selector symbols
+containing colons (~setDelegate:~ etc.), so the macro is unusable for
+multi-part selectors.
+
+#+begin_src clojure
+;; Signature: (msg-send ret-type obj selector & typed-args)
+;; ret-type: :void :pointer :int64 :int32 :float64 :float32 :int8
+
+;; Zero-arg message
+(objc-rt/msg-send :pointer mgr "startUpdatingLocation")
+
+;; One-arg message
+(objc-rt/msg-send :void mgr "setDelegate:" :pointer my-delegate)
+
+;; Multi-arg message
+(objc-rt/msg-send :void mgr
+                  "startRangingBeaconsInRegion:identifier:"
+                  :pointer region-ptr
+                  :pointer (f/->nsstring "my-region"))
+#+end_src
+
+** Creating ObjC Instances (~new-instance~)
+
+#+begin_src clojure
+;; From a class pointer (returned by defclass)
+(objc-rt/new-instance MyDelegateClass)
+
+;; From a class name string
+(objc-rt/new-instance "CLLocationManager")
+#+end_src
+
+** Defining New Classes at Runtime (~defclass~, ~defclass!~)
+
+~defclass~ registers a new ObjC class with methods at REPL-load time.
+~defclass!~ (in ~grease.ios.repl~) is safe to re-evaluate: it appends an
+auto-incrementing ~_vN~ suffix to avoid the "class already registered" crash.
+
+#+begin_src clojure
+;; defclass — use inside files loaded once (not from the interactive REPL)
+(objc-rt/defclass MyLocationDelegate "NSObject"
+  "locationManager:didUpdateLocations:" "v@:@@"
+  (fn [_self _cmd _mgr locs]
+    (reset! last-location locs)))
+
+;; defclass! — safe to re-evaluate from the nREPL
+(require '[grease.ios.repl :refer [defclass!]])
+(defclass! MyDelegate "NSObject"
+  "someCallback:" "v@:@"
+  (fn [_self _cmd arg]
+    (println "callback:" arg)))
+;; Creates MyDelegate_v1, bound to MyDelegate. Re-eval → MyDelegate_v2, etc.
+#+end_src
+
+Type encoding quick reference:
+| Symbol | Meaning |
+|--------+---------|
+| ~v~    | void    |
+| ~@~    | id / object pointer |
+| ~:~    | SEL     |
+| ~q~    | long long (int64) |
+| ~i~    | int     |
+| ~c~    | char / BOOL |
+| ~d~    | double  |
+
+** Adding Protocol Conformance
+
+#+begin_src clojure
+;; Mark a class as conforming to a named ObjC protocol
+(objc-rt/add-protocol! MyDelegateClass "CLLocationManagerDelegate")
+
+;; Verify coverage before wiring up
+(objc-rt/check-conformance! MyDelegateClass
+                             "CLLocationManagerDelegate"
+                             ["locationManager:didUpdateLocations:"])
+
+;; Query
+(objc-rt/conforms-to-protocol? MyDelegateClass "CLLocationManagerDelegate")
+(objc-rt/class-responds-to? MyDelegateClass "locationManager:didUpdateLocations:")
+#+end_src
+
+* Foundation Type Conversions
+
+~grease.ios.foundation~ converts between Clojure values and the core
+NS types returned by ObjC APIs.
+
+** NSString ↔ String
+
+#+begin_src clojure
+(f/->nsstring "hello")          ;; Clojure string → NSString pointer (autoreleased)
+(f/nsstring->str some-nsstring) ;; NSString pointer → Clojure string
+#+end_src
+
+** NSNumber ↔ Long / Double
+
+#+begin_src clojure
+(f/->nsnumber-long 42)          ;; → NSNumber pointer
+(f/->nsnumber-double 3.14)      ;; → NSNumber pointer
+(f/nsnumber->long n)            ;; NSNumber pointer → Clojure long
+(f/nsnumber->double n)          ;; NSNumber pointer → Clojure double
+#+end_src
+
+** NSArray ↔ Vector
+
+#+begin_src clojure
+;; coll must be a seq of raw ObjC pointers
+(f/->nsarray [ptr1 ptr2 ptr3])  ;; → NSMutableArray (autoreleased)
+
+;; Returns vec of raw ObjC pointers — convert elements separately
+(f/nsarray->vec arr)
+;; → [#object[...] #object[...]]
+#+end_src
+
+** NSDictionary ↔ Map
+
+#+begin_src clojure
+;; Keys/values must be ObjC pointers
+(f/->nsdict {k1-ptr v1-ptr})
+
+;; Both keys and values must be NSString pointers
+(f/->nsdict-str {"key" "value"})
+
+;; Returns map with string keys and raw-pointer values
+(f/nsdict->map dict)
+
+;; Returns map with string keys and string values
+(f/nsdict->map-str dict)
+#+end_src
+
+** NSURL ↔ String
+
+#+begin_src clojure
+(f/string->nsurl "https://example.com")  ;; → NSURL pointer
+(f/nsurl->string url-ptr)               ;; → Clojure string
+#+end_src
+
+** NSError → Map
+
+#+begin_src clojure
+(f/nserror->map err-ptr)
+;; => {:domain "NSCocoaErrorDomain" :code 256 :description "..."}
+#+end_src
+
+** Pointer Address
+
+#+begin_src clojure
+;; Returns native memory address as a long — use as a stable identity key
+(f/ptr-address some-ptr)  ;; => 140234567890
+#+end_src
+
+** Null and Main Queue Pointers
+
+Some ObjC APIs take nullable pointer arguments.  Clojure ~nil~ and
+~java.lang.Long~ are not valid for ~clj-libffi~ ~:pointer~ args.
+
+#+begin_src clojure
+(f/null-ptr)   ;; native NULL pointer — use for nullable ObjC args
+(f/main-queue) ;; dispatch_main_q — equivalent to nil for queue args
+               ;; tells CB/CL managers to use the main thread
+#+end_src
+
+** Autorelease Pool
+
+#+begin_src clojure
+;; Wrap tight loops that create many temporary NS objects
+(f/with-autorelease
+  (dotimes [i 10000]
+    (f/->nsstring (str "item-" i))))
+#+end_src
+
+** with-retained
+
+Retain ObjC objects for the duration of a scope, releasing them on exit:
+
+#+begin_src clojure
+(f/with-retained [mgr  (make-location-manager)
+                  dlg  (make-delegate)]
+  (wire-and-start! mgr dlg)
+  @result-promise)
+#+end_src
+
+* Memory Management
+
+ObjC objects are ARC-managed.  An object is released as soon as no
+strong reference holds it.  The ~grease.ios.retain~ registry keeps
+strong references alive.
+
+** retain! / release!
+
+#+begin_src clojure
+;; Register a pointer under a key (returns the key)
+(retain/retain! ::my-manager mgr-ptr :manager)
+
+;; Release — removes from registry, returns the raw pointer
+(retain/release! ::my-manager)
+
+;; Release all objects of a given kind
+(retain/release-kind! :manager)
+
+;; Inspect
+(retain/retained ::my-manager)    ;; => raw pointer or nil
+(retain/retained-keys)             ;; => set of all registered keys
+(retain/retained-count)            ;; => integer
+#+end_src
+
+** Rule: Always retain delegates AND managers
+
+#+begin_src clojure
+;; Both the manager AND its delegate must be retained.
+;; Losing either causes silent crashes.
+(def held-mgr      (atom nil))
+(def held-delegate (atom nil))
+
+(grease/dispatch-main-async
+ #(let [mgr (objc-rt/new-instance "CLLocationManager")
+        dlg (MyLocationDelegate)]  ;; defdelegate factory fn
+   (reset! held-mgr mgr)
+   (reset! held-delegate dlg)
+   (objc-rt/msg-send :void mgr "setDelegate:"
+                     :pointer (delegate/objc-ptr dlg))
+   (objc-rt/msg-send :void mgr "startUpdatingLocation")))
+#+end_src
+
+* REPL Helpers
+
+** on-main
+
+Every UIKit, Core Location, and most other iOS framework calls must
+happen on the main thread.  The nREPL evaluates on a background thread.
+~on-main~ dispatches synchronously to the main queue and returns the result.
+
+#+begin_src clojure
+(require '[grease.ios.repl :refer [on-main]])
+
+;; Returns result or throws on error/timeout
+(on-main (ui/root-view))          ;; => UIView pointer
+(on-main (ui/get-frame some-view))
+(on-main (nav/make-nav! HomeScreen))
+
+;; UIKit mutations always need on-main
+(on-main
+  (let [lbl (ui/new-label "Hello")]
+    (ui/add-subview! (ui/root-view) lbl)))
+#+end_src
+
+** ObjC Introspection
+
+#+begin_src clojure
+(require '[grease.ios.repl :as repl])
+
+;; What class is this pointer?
+(repl/class-name-of some-ptr)     ;; => "CLLocation"
+
+;; Does it respond to a selector?
+(repl/respond-to? mgr "startUpdatingLocation")  ;; => true
+
+;; What methods does a class define?
+(take 5 (repl/methods-of "NSString"))
+;; => ["UTF8String" "cStringLength" "characterAtIndex:" ...]
+
+;; Walk the class hierarchy
+(repl/super-class-of "UIViewController")     ;; => "UIResponder"
+(repl/inheritance-chain "UIViewController")
+;; => ["UIViewController" "UIResponder" "NSObject"]
+#+end_src
+
+* Hiccup UI Rendering
+
+~grease.ios.hiccup~ implements a React-like reconciler that maps Hiccup
+vectors to UIKit views.  The renderer diffs a previous tree against a new
+tree and patches only what changed.
+
+** Hiccup Syntax
+
+#+begin_src clojure
+;; [:tag props? & children]
+[:label {:text "Hello"}]
+[:view {:bg :system-background}
+  [:label {:text "Title" :font [:system-bold 18]}]
+  [:label {:text "Body"  :color [0.3 0.3 0.3]}]]
+#+end_src
+
+** Supported Tags and Props
+
+| Tag        | UIKit class       | Notable props |
+|------------+-------------------+---------------|
+| ~:view~    | UIView            | ~:bg~ ~:alpha~ ~:hidden~ ~:corner-radius~ |
+| ~:label~   | UILabel           | ~:text~ ~:font~ ~:color~ ~:align~ |
+| ~:button~  | UIButton          | ~:title~ ~:on-tap~ ~:bg~ |
+| ~:image~   | UIImageView       | ~:image~ (system-name string) |
+| ~:scroll~  | UIScrollView      | ~:content-size~ |
+| ~:stack~   | UIStackView       | ~:axis~ ~:spacing~ ~:distribution~ |
+| ~:text-field~ | UITextField    | ~:placeholder~ ~:text~ ~:on-change~ |
+
+Common props:
+- ~:bg~ — background color (see [[*Colors]])
+- ~:color~ — foreground/text color
+- ~:font~ — font spec (see [[*Fonts]])
+- ~:alpha~ — transparency (0.0–1.0)
+- ~:hidden~ — boolean
+- ~:corner-radius~ — float
+- ~:constraints~ — vector of layout constraint specs (see [[*Layout Constraints]])
+- ~:key~ — stable identity string for keyed reconciliation
+
+** mount! / unmount!
+
+#+begin_src clojure
+;; Mount a reactive hiccup tree into a parent UIView.
+;; state-atoms is a vec of atoms; re-renders whenever any changes.
+;; render-fn is a zero-arg fn that returns the hiccup tree.
+(hiccup/mount! :my-screen root-view [state-atom]
+               #(view-fn @state-atom))
+
+;; Tear down watches and remove all rendered subviews
+(hiccup/unmount! :my-screen)
+
+;; Re-render immediately (no reactive trigger)
+(hiccup/render! :my-screen root-view (view-fn @state))
+#+end_src
+
+** Keyed Children
+
+Give children a ~:key~ prop to enable stable identity reconciliation.
+Without keys, grease reconciles by position.  With keys, it matches
+by key across re-renders — important when children are reordered or
+dynamically inserted/removed.
+
+#+begin_src clojure
+[:view {}
+  (for [{:keys [id name]} @items]
+    [:label {:key (str id) :text name}])]
+#+end_src
+
+** Subtree Mounts
+
+Independent sub-regions of the tree can be mounted separately and
+torn down without affecting sibling subtrees:
+
+#+begin_src clojure
+(hiccup/mount-subtree! :my-screen :sidebar
+                       sidebar-view [sidebar-state]
+                       #(sidebar-view-fn @sidebar-state))
+
+(hiccup/unmount-subtree! :my-screen :sidebar)
+#+end_src
+
+** memo
+
+Memoize a subtree until deps change to avoid unnecessary reconciliation:
+
+#+begin_src clojure
+[:view {}
+  (hiccup/memo [heavy-data]
+    [:label {:text (expensive-render heavy-data)}])]
+#+end_src
+
+* Screen Lifecycle
+
+~grease.ios.screen~ provides a higher-level abstraction over ~hiccup/mount!~.
+A "screen" is a named component with its own state atom, lifecycle hooks,
+and a view function.
+
+** defscreen
+
+#+begin_src clojure
+(screen/defscreen Counter
+  :state    {:count 0}
+  :view     (fn [state]
+              [:view {}
+               [:label {:text (str "Count: " (:count state))}]
+               [:button {:title "+"
+                         :on-tap (fn [] (swap! (screen/screen-state 'Counter)
+                                               update :count inc))}]])
+  :on-mount   (fn [{:keys [state root-view]}]
+                (println "mounted, initial:" @state))
+  :on-unmount (fn [{:keys [state]}]
+                (println "unmounted, final:" @state)))
+#+end_src
+
+- ~:state~ — initial value for the state atom
+- ~:view~ — ~(fn [state-value] hiccup-tree)~; called with ~@state~ on every change
+- ~:on-mount~ — called once after first render with ~{:state atom :root-view ptr}~
+- ~:on-unmount~ — called before teardown with ~{:state atom}~
+
+** present! / dismiss!
+
+#+begin_src clojure
+;; Mount Counter into the root view
+(on-main (screen/present! Counter (ui/root-view)))
+
+;; Update state — triggers a re-render automatically
+(swap! (screen/screen-state 'Counter) update :count inc)
+
+;; Force an immediate re-render
+(screen/update-view! 'Counter)
+
+;; Tear down
+(screen/dismiss! 'Counter)
+#+end_src
+
+** Multiple Screens
+
+Each screen is registered by its name in ~active-screens~.  Presenting
+the same screen name a second time replaces the first.
+
+#+begin_src clojure
+(screen/present! HomeScreen main-view)
+(screen/present! DetailPanel side-view)
+(screen/dismiss! 'HomeScreen)
+#+end_src
+
+* Navigation
+
+~grease.ios.nav~ wraps UINavigationController with defscreen-compatible
+screen specs.
+
+** make-nav!
+
+Creates a UINavigationController with a root defscreen spec.  Must be
+called on the main thread (~initWithRootViewController:~ touches UIKit
+layout).
+
+#+begin_src clojure
+;; Returns UINavigationController pointer — hold it in an atom!
+(def nav-ctrl (atom nil))
+(reset! nav-ctrl (on-main (nav/make-nav! HomeScreen)))
+#+end_src
+
+** push! / pop!
+
+#+begin_src clojure
+;; Push a new screen onto the stack
+(nav/push! @nav-ctrl DetailScreen)
+(nav/push! @nav-ctrl DetailScreen false)  ;; no animation
+
+;; Pop the top screen
+(nav/pop! @nav-ctrl)
+(nav/pop! @nav-ctrl false)  ;; no animation
+#+end_src
+
+** present-modal! / dismiss-modal!
+
+#+begin_src clojure
+;; Present a screen modally (wrapped in a new UINavigationController)
+(def modal-nc (atom nil))
+(on-main
+  (let [rvc (objc-rt/msg-send :pointer (ui/key-window) "rootViewController")]
+    (reset! modal-nc (nav/present-modal! rvc SettingsScreen))))
+
+;; Dismiss
+(on-main
+  (let [rvc (objc-rt/msg-send :pointer (ui/key-window) "rootViewController")]
+    (nav/dismiss-modal! rvc)))
+#+end_src
+
+** set-title! / view-controllers
+
+#+begin_src clojure
+;; Set navigation bar title on a VC pointer
+(nav/set-title! vc-ptr "My Screen")
+
+;; Returns vec of UIViewController pointers (root first)
+(on-main (nav/view-controllers @nav-ctrl))
+;; => [#object[...] #object[...]]
+#+end_src
+
+** nav-vc-registry
+
+A plain atom holding ~{vc-address → context-map}~ for all live VCs.
+Each context map contains:
+- ~:screen-spec~ — the defscreen map
+- ~:nav-key~ — unique gensym used as hiccup mount key
+- ~:state~ — the screen's state atom
+- ~:retain-key~ — retain-registry key for cleanup
+
+#+begin_src clojure
+(count @nav/nav-vc-registry)  ;; number of live VCs
+#+end_src
+
+* UIKit Utilities
+
+All functions in ~grease.ios.uikit~ must be called on the main thread.
+
+** View Hierarchy
+
+#+begin_src clojure
+(on-main (ui/key-window))        ;; => UIWindow pointer
+(on-main (ui/root-view))         ;; => root UIView pointer
+(on-main (ui/subviews some-view)) ;; => vec of UIView pointers
+
+;; Recursive map of the view tree
+(on-main (ui/view-tree (ui/root-view)))
+;; => {:class "UIView" :frame {...} :subview-count 2
+;;     :children [{:class "UILabel" ...}]}
+(on-main (ui/view-tree (ui/root-view) 2))  ;; limit depth to 2
+#+end_src
+
+** Frames and Centers
+
+#+begin_src clojure
+(on-main (ui/get-frame some-view))     ;; => {:x 0.0 :y 100.0 :w 375.0 :h 44.0}
+(on-main (ui/set-frame! view 0 100 375 44))
+
+(on-main (ui/get-center some-view))    ;; => {:cx 187.5 :cy 122.0}
+(on-main (ui/set-center! view 187.5 122.0))
+#+end_src
+
+** Creating and Placing Views
+
+#+begin_src clojure
+(on-main
+  (let [lbl (ui/new-label "Hello from REPL")]
+    (ui/add-subview! (ui/root-view) lbl)))
+
+(on-main (ui/remove-from-superview! lbl))
+#+end_src
+
+** Styling
+
+#+begin_src clojure
+;; All color components are 0.0–1.0
+(on-main (ui/set-text-color! label 1.0 0.0 0.0 1.0))       ;; red
+(on-main (ui/set-background-color! view 0.0 0.0 0.0 0.5))  ;; semi-transparent black
+(on-main (ui/set-font-size! label 24.0))
+(on-main (ui/set-text-alignment! label 1))  ;; 0=left 1=center 2=right
+#+end_src
+
+* Colors
+
+~grease.ios.color/->uicolor~ coerces a color spec to a UIColor pointer.
+All four input shapes are accepted:
+
+#+begin_src clojure
+;; Keyword — from grease/colors.edn named palette
+(color/->uicolor :red)
+(color/->uicolor :system-background)
+(color/->uicolor :label)  ;; adaptive label color
+
+;; [r g b] or [r g b a] vector (0.0–1.0 components)
+(color/->uicolor [0.2 0.5 0.9])
+(color/->uicolor [0.2 0.5 0.9 0.8])
+
+;; Hex string — #RGB, #RRGGBB, or #RRGGBBAA
+(color/->uicolor "#FF5733")
+(color/->uicolor "#3FBCBCCC")
+
+;; Already a UIColor pointer — returned as-is (idempotent)
+(color/->uicolor existing-color-ptr)
+#+end_src
+
+Colors are used throughout hiccup via the ~:bg~ and ~:color~ props, and
+in ~anim/set-bg!~, ~anim/animate~, etc.
+
+* Fonts
+
+~grease.ios.font/->uifont~ coerces a font spec to a UIFont pointer:
+
+#+begin_src clojure
+;; Plain number — system font at that point size
+(font/->uifont 17)
+
+;; [:keyword size] — system font variants
+(font/->uifont [:system 17])
+(font/->uifont [:system-bold 17])
+(font/->uifont [:system-italic 17])
+(font/->uifont [:monospaced 14])
+
+;; ["Font Name" size] — named font
+(font/->uifont ["Helvetica Neue" 14])
+(font/->uifont ["SFProDisplay-Regular" 18])
+
+;; Already a UIFont pointer — returned as-is (idempotent)
+(font/->uifont existing-font-ptr)
+#+end_src
+
+Use font specs directly in hiccup ~:font~ props:
+
+#+begin_src clojure
+[:label {:text "Title" :font [:system-bold 20]}]
+[:label {:text "Body"  :font 16}]
+#+end_src
+
+* Layout Constraints
+
+~grease.ios.layout~ expresses NSLayoutConstraints as plain Clojure data.
+
+** constrain!
+
+#+begin_src clojure
+;; Activates constraints on parent from a vec of spec maps.
+;; Automatically calls setTranslatesAutoresizingMaskIntoConstraints:NO.
+(on-main
+  (layout/constrain! parent-view
+    [(layout/constraint header :top    :eq safe-guide :top    :constant 8.0)
+     (layout/constraint header :leading :eq parent-view :leading :constant 16.0)
+     (layout/constraint header :trailing :eq parent-view :trailing :constant -16.0)
+     (layout/constraint header :height  :eq nil :not-an-attr :constant 44.0)]))
+#+end_src
+
+** Safe Area Guide
+
+#+begin_src clojure
+(on-main
+  (let [safe (layout/safe-area-guide (ui/root-view))]
+    (layout/constrain! (ui/root-view)
+      [(layout/constraint my-view :top :eq safe :top)])))
+#+end_src
+
+** layout-> DSL Macro
+
+A terse threading macro for constraint expressions:
+
+#+begin_src clojure
+;; Syntax: (rel (:attr view) (:attr view) constant)
+;; rel: = <= >=
+(on-main
+  (layout/layout-> root-view
+    (= (:top    header)  (:top    :parent) 20.0)
+    (= (:leading header) (:leading :parent) 16.0)
+    (= (:width  header)  (:width  :parent)  0.0)
+    (= (:height header)  (:height :parent)  0.0
+       :multiplier 0.15)))
+#+end_src
+
+** layout-attributes Reference
+
+#+begin_example
+:left :right :top :bottom :leading :trailing
+:width :height :center-x :center-y :baseline :not-an-attr
+#+end_example
+
+* Animations
+
+~grease.ios.anim~ wraps UIView animation APIs as promises.  Animation
+body functions must be called on the main thread.
+
+** animate
+
+#+begin_src clojure
+(on-main
+  (anim/animate {:duration 0.3 :curve :ease-in-out}
+    (fn []
+      (anim/set-alpha! my-view 0.0)
+      (anim/set-frame! my-view 0 -100 375 44))))
+
+;; Curves: :ease-in-out (default) :ease-in :ease-out :linear
+;; :delay — seconds before starting (default 0.0)
+#+end_src
+
+** spring
+
+#+begin_src clojure
+(on-main
+  (anim/spring {:duration 0.5 :damping 0.7 :velocity 0.0}
+    (fn []
+      (anim/set-frame! card 0 200 375 200))))
+#+end_src
+
+** chain
+
+#+begin_src clojure
+;; Animations run sequentially
+(on-main
+  @(anim/chain
+    {:duration 0.2} (fn [] (anim/set-alpha! view 0.0))
+    {:duration 0.3} (fn [] (anim/set-alpha! view 1.0))))
+#+end_src
+
+** anim-> Macro
+
+Expands animated property setters into a body fn:
+
+#+begin_src clojure
+(on-main
+  (anim/animate {:duration 0.4}
+    (anim/anim-> my-view
+      (alpha 0.5)
+      (bg [0.1 0.2 0.8])
+      (frame 0 100 375 200))))
+#+end_src
+
+Supported ops: ~alpha~, ~bg~, ~frame~.
+
+** Animatable Setters (standalone)
+
+These work both inside and outside animations:
+
+#+begin_src clojure
+(on-main (anim/set-alpha! view 0.5))
+(on-main (anim/set-bg!    view :blue))
+(on-main (anim/set-frame! view 0 0 375 44))
+#+end_src
+
+* KVO Observations
+
+~grease.ios.kvo~ wraps Key-Value Observing as Clojure ref-like values.
+
+** observe / release!
+
+#+begin_src clojure
+;; Create a KVO observation on obj for keypath
+;; Returns a KVORef — deref to get the current value
+(def location-obs
+  (kvo/observe location-manager "location"))
+
+@location-obs  ;; => raw CLLocation pointer (or nil)
+
+;; Tear down when done
+(kvo/release! location-obs)
+#+end_src
+
+** Watches
+
+#+begin_src clojure
+;; add-watch / remove-watch work on the internal atom
+(kvo/add-kvo-watch location-obs :my-watch
+  (fn [_key _ref _old new-val]
+    (println "location changed:" new-val)))
+
+(kvo/remove-kvo-watch location-obs :my-watch)
+#+end_src
+
+** reaction
+
+Derives a new atom from one or more KVO observables.  Re-evaluates
+whenever any observable changes.  No ~release!~ needed.
+
+#+begin_src clojure
+(def speed-mph
+  (kvo/reaction
+    #(when-let [loc @location-obs]
+       (/ (f/nsnumber->double
+            (objc-rt/msg-send :pointer loc "speed"))
+          0.44704))
+    location-obs))
+
+@speed-mph  ;; => derived speed in mph
+#+end_src
+
+** Complete KVO Example
+
+#+begin_src clojure
+(def held-mgr (atom nil))
+
+(grease/dispatch-main-async
+  #(let [mgr (objc-rt/new-instance "CLLocationManager")]
+     (reset! held-mgr mgr)
+     (objc-rt/msg-send :void mgr "requestWhenInUseAuthorization")
+     (objc-rt/msg-send :void mgr "startUpdatingLocation")))
+
+(def loc-obs (kvo/observe @held-mgr "location"))
+
+(kvo/add-kvo-watch loc-obs :printer
+  (fn [_ _ _ loc]
+    (when loc
+      (println "lat:" (objc-rt/msg-send :float64 loc "latitude")))))
+#+end_src
+
+* Delegates
+
+~grease.ios.delegate/defdelegate~ generates an ObjC class and a factory
+function.  Calling the factory returns a Clojure agent whose state is
+updated by the delegate's callbacks.
+
+** defdelegate
+
+#+begin_src clojure
+(delegate/defdelegate LocationDelegate "CLLocationManagerDelegate"
+  {:state   {:location nil :error nil}
+   :methods
+   {[:location-manager _ :did-update-locations locs]
+    (fn [state _mgr locs]
+      (assoc state :location locs))
+
+    [:location-manager _ :did-fail-with-error err]
+    (fn [state _mgr err]
+      (assoc state :error (f/nserror->map err)))}})
+#+end_src
+
+- The class is created once (via ~defonce~) to survive REPL reloads.
+- Method descriptor syntax: ~[keyword binding keyword binding ...]~.
+  Each keyword contributes ~camelCase:~ to the ObjC selector.  Bindings
+  are local names for the ObjC pointer args.
+- Transition fn signature: ~(fn [current-state & objc-args] → new-state)~.
+  Errors are caught; the state is preserved and stored under ~::last-error~.
+
+** Using a Delegate
+
+#+begin_src clojure
+;; Create an instance — returns an agent
+(def dlg-agent (LocationDelegate))
+
+;; Extract the raw ObjC pointer
+(def dlg-ptr (delegate/objc-ptr dlg-agent))
+
+;; Read state
+@dlg-agent  ;; => {:location nil :error nil}
+
+;; Watch for changes
+(add-watch dlg-agent :my-watch
+  (fn [_ _ _ new-state]
+    (println "new location:" (:location new-state))))
+
+;; Clean up when done
+(delegate/release-delegate! dlg-agent)
+#+end_src
+
+** Full Location Manager Example
+
+#+begin_src clojure
+(delegate/defdelegate LocDelegate "CLLocationManagerDelegate"
+  {:state {:loc nil}
+   :methods
+   {[:location-manager _ :did-update-locations locs]
+    (fn [s _ _locs] (assoc s :loc _locs))}})
+
+(def held-dlg (atom nil))
+(def held-mgr (atom nil))
+
+(grease/dispatch-main-async
+  #(let [dlg (LocDelegate)
+         mgr (objc-rt/new-instance "CLLocationManager")]
+     (reset! held-dlg dlg)
+     (reset! held-mgr mgr)
+     (objc-rt/msg-send :void mgr "setDelegate:"
+                       :pointer (delegate/objc-ptr dlg))
+     (objc-rt/msg-send :void mgr "requestWhenInUseAuthorization")
+     (objc-rt/msg-send :void mgr "startUpdatingLocation")))
+
+;; After granting permission:
+@held-dlg  ;; => {:loc #object[...]}
+#+end_src
+
+* Blocks and Completion Handlers
+
+~grease.ios.blocks~ wraps Clojure fns in ObjC heap blocks for APIs that
+expect completion handler blocks.
+
+** Block Factories
+
+#+begin_src clojure
+;; void (^)(void)
+(blk/make-void-block (fn [] (println "done")))
+
+;; void (^)(NSData*, NSURLResponse*, NSError*)
+(blk/make-data-block (fn [data resp err]
+                       (when (nil? err)
+                         (println "bytes:" (objc-rt/msg-send :int64 data "length")))))
+
+;; void (^)(BOOL, NSError*)  — for HealthKit, notifications, etc.
+(blk/make-bool-error-block (fn [granted? err]
+                              (println "granted:" (not= 0 granted?))))
+
+;; Arbitrary signature
+(blk/make-typed-block :void [:pointer :pointer]
+                      (fn [a b] (println "got" a b)))
+#+end_src
+
+*Rule*: Store block pointers in atoms to prevent premature GC.
+
+** URLSession Example
+
+#+begin_src clojure
+(def held-block (atom nil))
+(def result     (atom nil))
+
+(let [session (objc-rt/msg-send :pointer
+                 (grease/get-objc-class "NSURLSession") "sharedSession")
+      url     (f/string->nsurl "https://example.com")
+      req     (objc-rt/msg-send :pointer
+                 (grease/get-objc-class "NSURLRequest")
+                 "requestWithURL:" :pointer url)
+      handler (blk/make-data-block
+                (fn [data _resp _err]
+                  (reset! result (objc-rt/msg-send :int64 data "length"))))
+      task    (objc-rt/msg-send :pointer session
+                "dataTaskWithRequest:completionHandler:"
+                :pointer req :pointer handler)]
+  (reset! held-block handler)
+  (objc-rt/msg-send :void task "resume"))
+
+;; After a few seconds:
+@result  ;; => 1256
+#+end_src
+
+** Completion as Promises (~let-completion~)
+
+~grease.ios.completion~ wraps blocks in promises for a sequential style:
+
+#+begin_src clojure
+(require '[grease.ios.completion :as comp])
+
+;; One-off HTTP GET
+(def response (comp/fetch-url! "https://httpbin.org/get"))
+@response  ;; => {:data ... :response ... :error nil}
+
+;; let-completion DSL
+(comp/let-completion [result (comp/fetch-url! "https://httpbin.org/json")]
+  (println "status:" (objc-rt/msg-send :int64 (:response result) "statusCode")))
+#+end_src
+
+* NSNotificationCenter
+
+~grease.ios.notify~ provides a lightweight event bus backed by
+NSNotificationCenter.
+
+#+begin_src clojure
+(require '[grease.ios.notify :as notify])
+
+;; Subscribe — returns a handle for unsubscribing
+(def sub (notify/on "UIKeyboardWillShowNotification"
+           (fn [userinfo]
+             (println "keyboard showing" userinfo))))
+
+;; Subscribe once — auto-removes after first invocation
+(notify/once "UIApplicationDidBecomeActiveNotification"
+             (fn [_] (println "app became active")))
+
+;; Unsubscribe
+(notify/off sub)
+#+end_src
+
+* System Services (Bluetooth, Camera)
+
+** CoreBluetooth
+
+#+begin_src clojure
+(require '[grease.ios.bluetooth :as bt])
+
+;; Start scanning for peripherals
+(on-main (bt/start-scanning!))
+
+;; Current BT state as keyword
+@bt/bt-state  ;; => :powered-on
+
+;; Discovered peripherals
+@bt/peripherals
+;; => [{:name "MyDevice" :rssi -72 :ptr #object[...]} ...]
+
+;; Scan manually (calls scanForPeripheralsWithServices:options:)
+(bt/scan!)
+
+;; Stop
+(bt/stop-scanning!)
+#+end_src
+
+** Camera (AVFoundation)
+
+#+begin_src clojure
+(require '[grease.ios.camera :as cam])
+
+;; Check / request authorization
+(cam/authorization-status)  ;; => :authorized :denied :not-determined :restricted
+
+(cam/request-authorization! (fn [granted?]
+                               (when granted? (cam/start-session!))))
+
+;; Start 30fps video capture session
+(on-main (cam/start-session!))
+
+;; Most recent sample buffer
+@cam/last-frame   ;; => CMSampleBufferRef pointer
+@cam/frame-count  ;; => integer
+
+;; Stop
+(on-main (cam/stop-session!))
+(cam/running?)  ;; => false
+#+end_src
+
+* Data-Driven Engine (api.clj)
+
+~grease.ios.api~ provides a higher-level, spec-driven interface.  It
+reads framework specs from EDN files (in ~resources/grease/frameworks/~),
+maps ObjC names to Clojure keywords, and auto-coerces argument and return
+types.
+
+** Loading the Engine
+
+#+begin_src clojure
+(require '[grease.ios.api :as api])
+
+;; Initialize — loads structs, naming rules, types, and all framework specs
+(api/load!)
+
+;; Reload specs from disk (for iterative development)
+(api/reload!)
+#+end_src
+
+** Creating Instances (~make~, ~class-call~)
+
+#+begin_src clojure
+;; Class method factory — returns an ObjcObject record
+(api/make "NSMutableArray" "array")
+;; => #grease.ios.api.ObjcObject{:class-name "NSMutableArray" :ptr #object[...]}
+
+;; With arguments
+(api/make "NSURL" "URLWithString:" "https://example.com")
+
+;; Class-level method that returns a value (not an instance)
+(api/class-call "UIScreen" "mainScreen")
+#+end_src
+
+** Calling Methods (~call~)
+
+#+begin_src clojure
+(def arr (api/make "NSMutableArray" "array"))
+
+;; Positional args, coerced by type table
+(api/call arr "addObject:" "hello")
+(api/call arr "count")  ;; => 1
+
+;; call* — raw pointer + explicit class name (escape hatch)
+(api/call* my-ptr "NSMutableArray" "count")
+#+end_src
+
+** Properties (~get-prop~, ~set-prop!~)
+
+#+begin_src clojure
+(def str-obj (api/make "NSString" "stringWithUTF8String:" "hello"))
+
+(api/get-prop str-obj "length")     ;; => 5
+(api/set-prop! my-view "alpha" 0.5)
+#+end_src
+
+** Enum Constants (~enum~)
+
+#+begin_src clojure
+;; Returns raw integer for a registered enum keyword
+(api/enum :NSTextAlignmentCenter)  ;; => 1
+(api/enum :CLAuthorizationStatusAuthorized)
+#+end_src
+
+** KVO via Engine
+
+#+begin_src clojure
+;; Returns a handle for unregistering
+(def handle (api/watch my-obj "location"
+              (fn [new-val] (println "location:" new-val))))
+
+(api/unwatch handle)
+#+end_src
+
+** ObjcObject Utilities
+
+#+begin_src clojure
+(api/objc-object? x)              ;; predicate
+(api/wrap ptr "CLLocation")       ;; wrap raw pointer with class name
+(:ptr my-obj)                     ;; extract raw pointer
+(:class-name my-obj)              ;; extract class name
+#+end_src
+
+* Namespace Quick Reference
+
+| Namespace | Alias | Purpose |
+|-----------+-------+---------|
+| ~grease.ios.objc~ | ~objc-rt~ | ~msg-send~, ~defclass~, ~new-instance~, ~add-protocol!~ |
+| ~grease.ios.foundation~ | ~f~ | NSString/Number/Array/Dict/URL/Error converters |
+| ~grease.ios.retain~ | ~retain~ | ARC retention registry |
+| ~grease.ios.repl~ | (refer ~on-main~) | ~on-main~, ~defclass!~, introspection |
+| ~grease.ios.uikit~ | ~ui~ | View hierarchy, frames, styling |
+| ~grease.ios.hiccup~ | ~hiccup~ | ~mount!~, ~unmount!~, ~render!~, ~memo~ |
+| ~grease.ios.screen~ | ~screen~ | ~defscreen~, ~present!~, ~dismiss!~ |
+| ~grease.ios.nav~ | ~nav~ | ~make-nav!~, ~push!~, ~pop!~, ~present-modal!~ |
+| ~grease.ios.color~ | ~color~ | ~->uicolor~ (keyword/vector/hex/pointer) |
+| ~grease.ios.font~ | ~font~ | ~->uifont~ (number/keyword/name) |
+| ~grease.ios.layout~ | ~layout~ | ~constrain!~, ~layout->~, ~safe-area-guide~ |
+| ~grease.ios.anim~ | ~anim~ | ~animate~, ~spring~, ~chain~, ~anim->~ |
+| ~grease.ios.kvo~ | ~kvo~ | ~observe~, ~release!~, ~reaction~ |
+| ~grease.ios.delegate~ | ~delegate~ | ~defdelegate~, ~objc-ptr~, ~release-delegate!~ |
+| ~grease.ios.blocks~ | ~blk~ | ~make-void-block~, ~make-data-block~, ~make-typed-block~ |
+| ~grease.ios.completion~ | ~comp~ | ~let-completion~, ~fetch-url!~ |
+| ~grease.ios.notify~ | ~notify~ | ~on~, ~off~, ~once~ |
+| ~grease.ios.bluetooth~ | ~bt~ | ~start-scanning!~, ~scan!~, ~stop-scanning!~ |
+| ~grease.ios.camera~ | ~cam~ | ~start-session!~, ~stop-session!~, ~last-frame~ |
+| ~grease.ios.api~ | ~api~ | ~load!~, ~make~, ~call~, ~get-prop~, ~set-prop!~, ~enum~ |
+| ~com.phronemophobic.grease~ | ~grease~ | ~dispatch-main-async~, ~get-objc-class~, ~objc-new~ |
+
+** Threading Rules Summary
+
+| Category | Must be on main thread? |
+|----------+------------------------|
+| UIKit view creation, layout, animation | Yes — use ~on-main~ |
+| CoreLocation manager start/stop | Yes |
+| NSObject ~alloc~/~init~ | No (safe on any thread) |
+| ObjC class registration (~defclass~) | No |
+| ~retain/retain!~ / ~retain/release!~ | No (atom-based, thread-safe) |
+| nREPL eval thread | Background — always wrap UIKit with ~on-main~ |
