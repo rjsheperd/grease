@@ -103,7 +103,7 @@ Selector map (inlined, not EDN):
  :monospaced  "monospacedSystemFontOfSize:weight:"}
 #+end_src
 
-** TODO 0.4 ~with-autorelease~
+** DONE 0.4 ~with-autorelease~
 :PROPERTIES:
 :file: src/grease/ios/foundation.clj (append)
 :loc: ~15
@@ -121,7 +121,7 @@ Selector map (inlined, not EDN):
 
 Integration test: create 1000 NSStrings inside the macro, verify no crash.
 
-** TODO 0.5 ~with-retained~
+** DONE 0.5 ~with-retained~
 :PROPERTIES:
 :file: src/grease/ios/foundation.clj (append)
 :loc: ~30

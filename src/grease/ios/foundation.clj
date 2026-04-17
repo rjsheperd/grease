@@ -18,6 +18,7 @@
   dispatch_queue_t (which tells CB/CL managers to use the main queue)."
   (:require [com.phronemophobic.clj-libffi :as ffi]
             [com.phronemophobic.grease :as grease]
+            [grease.ios.retain :as retain]
             [tech.v3.datatype.ffi :as dt-ffi]))
 
 (defn- ^:private msg-send*
@@ -187,3 +188,59 @@
   {:domain      (nsstring->str (msg-send* :pointer err "domain"))
    :code        (msg-send* :int64 err "code")
    :description (nsstring->str (msg-send* :pointer err "localizedDescription"))})
+
+;; =============================================================================
+;; Resource-management macros
+;; =============================================================================
+
+(defmacro with-autorelease
+  "Execute `body` inside a fresh ObjC autorelease pool.
+
+  Any autoreleased ObjC objects created during `body` are drained when
+  the form exits (normally or via exception). Use this around tight loops
+  that create many temporary NSStrings, NSDates, etc. to avoid unbounded
+  memory growth.
+
+  Example:
+    (with-autorelease
+      (dotimes [i 10000]
+        (->nsstring (str \"item-\" i))))"
+  [& body]
+  `(let [pool# (ffi/call "objc_autoreleasePoolPush" :pointer)]
+     (try
+       ~@body
+       (finally
+         (ffi/call "objc_autoreleasePoolPop" :void :pointer pool#)))))
+
+(defmacro with-retained
+  "Retain ObjC objects for the duration of `body`, releasing them on exit.
+
+  `bindings` follows the same syntax as `let`: alternating symbols and
+  init-exprs. Each value is registered in [[grease.ios.retain]] under a
+  generated key. All entries are released in a `finally` block regardless
+  of whether `body` throws.
+
+  Callers should send any required teardown messages (e.g.
+  `removeObserver:`, `stopUpdatingLocation`) inside the body before the
+  macro releases the pointers.
+
+  Example:
+    (with-retained [mgr  (make-location-manager)
+                    dlg  (make-delegate)]
+      (wire-and-start! mgr dlg)
+      @result-promise)"
+  [bindings & body]
+  (assert (even? (count bindings))
+          "with-retained bindings must have an even number of forms")
+  (let [pairs   (partition 2 bindings)
+        syms    (map first pairs)
+        inits   (map second pairs)
+        ks      (map (fn [_] (gensym "retain-key-")) syms)]
+    `(let ~(vec (interleave syms inits))
+       (let [keys# ~(mapv (fn [k s] `(retain/retain! '~k ~s ::with-retained))
+                          ks syms)]
+         (try
+           ~@body
+           (finally
+             (doseq [k# keys#]
+               (retain/release! k#))))))))
