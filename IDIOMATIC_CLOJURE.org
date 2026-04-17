@@ -254,7 +254,7 @@ callback fires (~^:integration~).
 :loc: ~120 impl + EDN
 :END:
 
-** TODO 3.1 Notification name registry (~resources/grease/notifications.edn~)
+** DONE 3.1 Notification name registry (~resources/grease/notifications.edn~)
 
 #+begin_src clojure
 {:keyboard-will-show
@@ -267,17 +267,17 @@ callback fires (~^:integration~).
  }
 #+end_src
 
-** TODO 3.2 Internal observer
+** DONE 3.2 Internal observer
 
 ~defclass!~ a ~GreaseNotificationObserver~ with ~handleNotification:~ (~"v@:@"~) once
 at module load. Dispatches to a table atom ~{notification-name → [callback ...]}~.
 
-** TODO 3.3 ~(on notification-key callback-fn)~
+** DONE 3.3 ~(on notification-key callback-fn)~
 
 Register callback; if first subscriber, wire internal observer via
 ~NSNotificationCenter addObserver:selector:name:object:~. Return subscription handle.
 
-** TODO 3.4 ~(off handle)~ / ~(once notification-key callback-fn)~
+** DONE 3.4 ~(off handle)~ / ~(once notification-key callback-fn)~
 
 ~off~: remove callback; if last subscriber, call ~removeObserver:name:object:~.
 ~once~: auto-~off~ after first invocation.

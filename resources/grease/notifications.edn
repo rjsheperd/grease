@@ -1,0 +1,26 @@
+{;; ── Keyboard ─────────────────────────────────────────────────────────────────
+ :keyboard-will-show   {:objc "UIKeyboardWillShowNotification"}
+ :keyboard-did-show    {:objc "UIKeyboardDidShowNotification"}
+ :keyboard-will-hide   {:objc "UIKeyboardWillHideNotification"}
+ :keyboard-did-hide    {:objc "UIKeyboardDidHideNotification"}
+ :keyboard-will-change {:objc "UIKeyboardWillChangeFrameNotification"}
+ :keyboard-did-change  {:objc "UIKeyboardDidChangeFrameNotification"}
+
+ ;; ── App lifecycle ─────────────────────────────────────────────────────────────
+ :app-did-become-active     {:objc "UIApplicationDidBecomeActiveNotification"}
+ :app-will-resign-active    {:objc "UIApplicationWillResignActiveNotification"}
+ :app-did-enter-background  {:objc "UIApplicationDidEnterBackgroundNotification"}
+ :app-will-enter-foreground {:objc "UIApplicationWillEnterForegroundNotification"}
+ :app-will-terminate        {:objc "UIApplicationWillTerminateNotification"}
+ :app-memory-warning        {:objc "UIApplicationDidReceiveMemoryWarningNotification"}
+
+ ;; ── Device ───────────────────────────────────────────────────────────────────
+ :orientation-change {:objc "UIDeviceOrientationDidChangeNotification"}
+ :battery-level      {:objc "UIDeviceBatteryLevelDidChangeNotification"}
+ :battery-state      {:objc "UIDeviceBatteryStateDidChangeNotification"}
+
+ ;; ── Content size ─────────────────────────────────────────────────────────────
+ :content-size-change {:objc "UIContentSizeCategoryDidChangeNotification"}
+
+ ;; ── Screen ───────────────────────────────────────────────────────────────────
+ :screen-brightness-change {:objc "UIScreenBrightnessDidChangeNotification"}}
