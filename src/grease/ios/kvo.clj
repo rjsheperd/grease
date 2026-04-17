@@ -38,7 +38,7 @@
         imp (grease/make-imp
              (fn [self _cmd _keypath _object change _context]
                (when-let [a (get @observer-dispatch
-                                 (.address ^tech.v3.datatype.ffi.Pointer self))]
+                                 (.address ^Object self))]
                  ;; Extract new value from change dict using NSKeyValueChangeNewKey (@"new")
                  (let [new-key (f/->nsstring "new")
                        new-val (objc-rt/msg-send :pointer change
@@ -57,22 +57,22 @@
 ;; KVORef type
 ;; =============================================================================
 
-(deftype KVORef [obj keypath observer-ptr retain-key
-                 ^clojure.lang.Atom internal]
+(deftype KVORef [obj keypath observer-ptr retain-key internal]
   clojure.lang.IDeref
-  (deref [_] @internal)
+  (deref [_] @internal))
 
-  clojure.lang.IRef
-  (setValidator [_ _f]
-    (throw (UnsupportedOperationException. "KVORef does not support validators")))
-  (getValidator [_] nil)
-  (getWatches [_] (.getWatches internal))
-  (addWatch [this k callback]
-    (add-watch internal k callback)
-    this)
-  (removeWatch [this k]
-    (remove-watch internal k)
-    this))
+;; IRef is not available in SCI — provide watcher delegation as plain fns.
+(defn add-kvo-watch
+  "Adds a watch function `f` under key `k` to a [[KVORef]]'s internal atom."
+  [^KVORef obs-ref k f]
+  (add-watch (.-internal obs-ref) k f)
+  obs-ref)
+
+(defn remove-kvo-watch
+  "Removes the watch registered under key `k` from a [[KVORef]]."
+  [^KVORef obs-ref k]
+  (remove-watch (.-internal obs-ref) k)
+  obs-ref)
 
 ;; =============================================================================
 ;; Public API (Phase 2.2 / 2.3)
@@ -96,7 +96,7 @@
         obs      (grease/objc-new _kvo-observer-cls)
         rk       (retain/retain! (gensym "kvo-") obs ::kvo-observer)]
     (swap! observer-dispatch assoc
-           (.address ^tech.v3.datatype.ffi.Pointer obs) a)
+           (.address ^Object obs) a)
     (objc-rt/msg-send :void obj
                       "addObserver:forKeyPath:options:context:"
                       :pointer obs
@@ -120,12 +120,9 @@
                       "removeObserver:forKeyPath:"
                       :pointer observer-ptr
                       :pointer (f/->nsstring keypath))
-    ;; Notify watches of termination
-    (doseq [[k f] (.getWatches ^clojure.lang.Atom (.-internal obs-ref))]
-      (f k obs-ref @(.-internal obs-ref) nil))
     ;; Clean up
     (swap! observer-dispatch dissoc
-           (.address ^tech.v3.datatype.ffi.Pointer observer-ptr))
+           (.address ^Object observer-ptr))
     (retain/release! rk)))
 
 ;; =============================================================================

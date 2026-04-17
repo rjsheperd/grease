@@ -11,14 +11,14 @@
 #   tests/run_tests foundation repl     # specific suites only
 #
 # Available suite names:
-#   foundation  repl  bluetooth  blocks  uikit  engine  frameworks  location
+#   foundation  repl  bluetooth  blocks  uikit  engine  frameworks  hiccup  nav  location
 
 set -euo pipefail
 
 CLJ_CMD="clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}' -M"
 
-SUITES_DEFAULT=(foundation repl bluetooth blocks uikit engine frameworks)
-SUITES_ALL=(foundation repl bluetooth blocks uikit engine frameworks location)
+SUITES_DEFAULT=(foundation repl bluetooth blocks uikit engine frameworks hiccup nav)
+SUITES_ALL=(foundation repl bluetooth blocks uikit engine frameworks hiccup nav location)
 
 declare -A SUITE_FILE=(
   [foundation]="tests/test_foundation.clj"
@@ -28,6 +28,8 @@ declare -A SUITE_FILE=(
   [uikit]="tests/test_uikit.clj"
   [engine]="tests/test_engine.clj"
   [frameworks]="tests/test_frameworks.clj"
+  [hiccup]="tests/test_engine_hiccup.clj"
+  [nav]="tests/test_engine_nav.clj"
   [location]="tests/test_location.clj"
 )
 

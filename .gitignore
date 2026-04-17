@@ -49,6 +49,9 @@ graal/
 xcode/MobileTest/graalvm
 xcode/MobileTest/staticjdk
 
+# Homebrew/cross-compiled libraries bundled into Xcode target (build artifacts)
+xcode/MobileTest/aarch64-apple-ios/
+
 # Generated native-image headers (produced by build-bb-o)
 bb_dynamic.h
 grease-uber.h

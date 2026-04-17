@@ -42,6 +42,14 @@ mv "$DEST_DIR/AppTemplate.xcodeproj" "$DEST_DIR/$APP_NAME.xcodeproj"
 mv "$DEST_DIR/AppTemplateTests"    "$DEST_DIR/${APP_NAME}Tests"
 mv "$DEST_DIR/AppTemplateUITests"  "$DEST_DIR/${APP_NAME}UITests"
 
+# Rename test swift files and scheme file to match APP_NAME
+mv "$DEST_DIR/${APP_NAME}Tests/AppTemplateTests.swift" \
+   "$DEST_DIR/${APP_NAME}Tests/${APP_NAME}Tests.swift" 2>/dev/null || true
+mv "$DEST_DIR/${APP_NAME}UITests/AppTemplateUITests.swift" \
+   "$DEST_DIR/${APP_NAME}UITests/${APP_NAME}UITests.swift" 2>/dev/null || true
+mv "$DEST_DIR/$APP_NAME.xcodeproj/xcshareddata/xcschemes/AppTemplate.xcscheme" \
+   "$DEST_DIR/$APP_NAME.xcodeproj/xcshareddata/xcschemes/$APP_NAME.xcscheme" 2>/dev/null || true
+
 # Substitute AppTemplate → APP_NAME in all text files
 LC_ALL=C find "$DEST_DIR" -type f \
   ! -name "*.png" ! -name "*.pdf" ! -name "*.a" ! -name "*.o" \

@@ -6,9 +6,9 @@
   into a root UIView, and calls any `:on-mount` hook.  [[dismiss!]] calls
   the `:on-unmount` hook and tears down retained resources.
 
-  This is a v1 naive implementation: the view tree is rendered once and is
-  not automatically updated when state changes.  Re-call [[present!]] on
-  the same root view to force a re-render.
+  [[present!]] uses [[hiccup/mount!]] to reactively re-render the view
+  tree whenever the screen's state atom changes.  [[dismiss!]] tears down
+  watches and the rendered subtree via [[hiccup/unmount!]].
 
   Example:
     (defscreen Counter
@@ -22,8 +22,7 @@
     ;; Mount on device:
     (present! Counter root-view)"
   (:require [com.phronemophobic.grease :as grease]
-            [grease.ios.hiccup :as hiccup]
-            [grease.ios.retain :as retain]))
+            [grease.ios.hiccup :as hiccup]))
 
 ;; =============================================================================
 ;; Active screen registry
@@ -69,22 +68,22 @@
   "Mounts `screen-spec` into `root-view`.
 
   1. Initialises a Clojure `atom` from `:initial-state`.
-  2. Renders the hiccup tree returned by `(:view screen-spec)` via [[hiccup/render!]].
+  2. Calls `[[hiccup/mount!]]` to reactively render the view whenever state changes.
   3. Calls `(:on-mount screen-spec)` with `{:state <atom> :root-view <ptr>}`.
   4. Registers the screen in the active registry under its name.
 
-  Returns the screen context map `{:name :state :root-view}`.
+  Returns the screen context map `{:name :state :root-view :view}`.
   Replaces any previously presented screen with the same name."
   [screen-spec root-view]
   (let [{:keys [name initial-state view on-mount]} screen-spec
         state (atom initial-state)
         ctx   {:name name :state state :root-view root-view
+               :view view
                :on-unmount (:on-unmount screen-spec)}]
-    (grease/dispatch-main-async
-     #(do
-        (hiccup/render! name root-view (view @state))
-        (when on-mount
-          (on-mount {:state state :root-view root-view}))))
+    (hiccup/mount! name root-view [state] #(view @state))
+    (when on-mount
+      (grease/dispatch-main-async
+       #(on-mount {:state state :root-view root-view})))
     (swap! active-screens assoc name ctx)
     ctx))
 
@@ -92,7 +91,7 @@
   "Tears down the screen registered under `screen-name`.
 
   1. Calls `(:on-unmount ctx)` with the context map if defined.
-  2. Releases hiccup views retained under the screen's render key.
+  2. Calls `[[hiccup/unmount!]]` to remove reactive watches and tear down the view tree.
   3. Removes the screen from the active registry.
 
   Safe to call if the screen is not currently presented."
@@ -100,13 +99,13 @@
   (when-let [ctx (get @active-screens screen-name)]
     (when-let [f (:on-unmount ctx)]
       (f ctx))
-    (retain/release-kind! ::hiccup-view)
+    (hiccup/unmount! screen-name)
     (swap! active-screens dissoc screen-name)))
 
 (defn update-view!
   "Re-renders `screen-name`'s view tree with the current state.
 
-  Useful after manually updating the state atom to force a UI refresh.
+  Useful for forcing an immediate re-render outside of the reactive cycle.
   Must be called on the main thread (or wraps in dispatch-main-async)."
   [screen-name]
   (when-let [{:keys [name state root-view view]} (get @active-screens screen-name)]

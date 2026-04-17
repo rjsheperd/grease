@@ -14,7 +14,8 @@
   | pointer                  | returned as-is (idempotent)         |"
   (:require [com.phronemophobic.grease :as grease]
             [grease.ios.foundation :as f]
-            [grease.ios.objc :as objc-rt]))
+            [grease.ios.objc :as objc-rt]
+            [tech.v3.datatype.ffi :as dt-ffi]))
 
 ;; ── Selector table ──────────────────────────────────────────────────────────
 
@@ -32,9 +33,6 @@
   Throws `ex-info` for unrecognised input."
   [spec]
   (cond
-    ;; Already a pointer — idempotent
-    (instance? tech.v3.datatype.ffi.Pointer spec) spec
-
     ;; Plain number — system font at that size
     (number? spec)
     (objc-rt/msg-send :pointer
@@ -69,6 +67,9 @@
         :else
         (throw (ex-info (str "Cannot coerce to UIFont: " (pr-str spec))
                         {:spec spec}))))
+
+    ;; Already a pointer — idempotent
+    (dt-ffi/convertible-to-pointer? spec) spec
 
     :else
     (throw (ex-info (str "Cannot coerce to UIFont: " (pr-str spec))

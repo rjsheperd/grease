@@ -22,12 +22,13 @@
   All UIKit operations are dispatched to the main thread via
   `grease/dispatch-main-async`."
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [com.phronemophobic.grease :as grease]
+            [grease.ios-host :as host]
             [grease.ios.color :as color]
             [grease.ios.font :as font]
             [grease.ios.foundation :as f]
             [grease.ios.invoke :as invoke]
+            [grease.ios.layout :as layout]
             [grease.ios.objc :as objc-rt]
             [grease.ios.retain :as retain]))
 
@@ -38,7 +39,7 @@
 (def ^:private registry
   "Hiccup tag + prop registry loaded from resources/grease/hiccup.edn."
   (delay
-    (edn/read-string (slurp (io/resource "grease/hiccup.edn")))))
+    (edn/read-string (host/read-resource "grease/hiccup.edn"))))
 
 (defn- tag-spec [tag]
   (or (get-in @registry [:tags tag])
@@ -75,7 +76,7 @@
         imp (grease/make-imp
              (fn [_self _cmd sender]
                (when-let [handlers (get @event-dispatch
-                                        (.address ^tech.v3.datatype.ffi.Pointer sender))]
+                                        (.address ^Object sender))]
                  (doseq [[_ cb] handlers]
                    (try (cb) (catch Exception _)))))
              [:pointer]
@@ -89,7 +90,7 @@
   (grease/objc-new _control-target-cls))
 
 (defn- wire-event! [control event-int callback-fn]
-  (let [addr (.address ^tech.v3.datatype.ffi.Pointer control)
+  (let [addr (.address ^Object control)
         k    (gensym "event-")]
     (swap! event-dispatch update addr assoc k callback-fn)
     (objc-rt/msg-send :void control
@@ -124,10 +125,11 @@
       (throw (ex-info (str "Unknown hiccup prop: " prop)
                       {:prop prop :known (keys (:props @registry))})))
     (cond
-      ;; Special: frame
+      ;; Special: frame or tree-level no-ops (:key, :constraints)
       (:special spec)
       (case (:special spec)
-        :set-frame (apply-frame! view v))
+        :set-frame (apply-frame! view v)
+        :identity  nil)
 
       ;; Control event handler
       (:control-event spec)
@@ -181,11 +183,18 @@
      (vary-meta view assoc ::retain-key rk))))
 
 ;; =============================================================================
-;; Tree rendering (Phase 4.2 — naive reconciler)
+;; Tree rendering (Phase 4.3 — smart reconciler + reactive bindings)
 ;; =============================================================================
 
-(def ^:private render-roots
-  "Map of {root-key → [retain-keys...]} for mounted subtrees."
+;; A rendered-node is a plain map:
+;;   {:tag kw :props map :view ptr :rk retain-key :children [rendered-node...]}
+
+(def ^:private rendered-trees
+  "Map of {root-key → rendered-node} for mounted subtrees."
+  (atom {}))
+
+(def ^:private mount-watches
+  "Map of {root-key → [[atom watch-key] ...]} for reactive `mount!` bindings."
   (atom {}))
 
 (defn- normalize-hiccup
@@ -195,55 +204,216 @@
     [tag (first rest) (next rest)]
     [tag {} rest]))
 
-(defn- render-node!
-  "Recursively renders a hiccup node under `parent`.
-  Returns the created view pointer."
-  [parent node]
-  (cond
-    ;; String → label
-    (string? node)
-    (let [view (create-element :label {:text node})]
-      (objc-rt/msg-send :void parent "addSubview:" :pointer view)
-      view)
+(defn- release-rendered!
+  "Recursively releases all retain keys in the rendered subtree.
+  Does NOT call `removeFromSuperview` — callers must handle that."
+  [node]
+  (when node
+    (doseq [child (:children node)]
+      (release-rendered! child))
+    (retain/release! (:rk node))))
 
-    ;; Hiccup vector
-    (vector? node)
-    (let [[tag props children] (normalize-hiccup node)
-          view (create-element tag props)]
-      (objc-rt/msg-send :void parent "addSubview:" :pointer view)
-      (doseq [child children]
-        (render-node! view child))
-      view)
+(defn teardown-rendered!
+  "Removes the top-level rendered view for `root-key` from its superview and
+  releases all resources in the subtree.
+
+  No-op if `root-key` is not currently rendered."
+  [root-key]
+  (when-let [node (get @rendered-trees root-key)]
+    (objc-rt/msg-send :void (:view node) "removeFromSuperview")
+    (release-rendered! node)
+    (swap! rendered-trees dissoc root-key)))
+
+;; =============================================================================
+;; Constraint integration (Phase 6.3)
+;; =============================================================================
+
+(defn- constraint-key->view
+  "Builds the symbolic-key → view-pointer map for constraint resolution.
+  `:parent` maps to the container view; child `:key` props map to their views."
+  [container-view child-nodes]
+  (into {:parent container-view}
+        (keep (fn [cn] (when (:key cn) [(:key cn) (:view cn)]))
+              child-nodes)))
+
+(defn- parse-constraint-tuple
+  "Converts a hiccup constraint tuple to a [[grease.ios.layout/constraint]] spec map.
+
+  Format: `[relation item1-ref attr1 item2-ref attr2 constant? multiplier?]`
+
+  `key->view` maps symbolic keys to live view pointers:
+  - `:parent` — the container view
+  - Any keyword set as a child's `:key` prop
+
+  Both `item1-ref` and `item2-ref` must resolve in `key->view`; nil refs are
+  not supported (fixed-dimension constraints require passing the same view for
+  both items).
+
+  Throws with `:key` and `:available` info when a ref cannot be resolved."
+  [key->view [rel ref1 attr1 ref2 attr2 & rest]]
+  (let [item1 (get key->view ref1)
+        _     (when-not item1
+                (throw (ex-info (str "Constraint item1-ref not found: " ref1)
+                                {:key ref1 :available (keys key->view)})))
+        item2 (get key->view ref2)
+        _     (when-not item2
+                (throw (ex-info (str "Constraint item2-ref not found: " ref2)
+                                {:key ref2 :available (keys key->view)})))]
+    {:item1      item1
+     :attr1      (or attr1 :not-an-attr)
+     :relation   rel
+     :item2      item2
+     :attr2      (or attr2 :not-an-attr)
+     :multiplier (double (or (second rest) 1.0))
+     :constant   (double (or (first rest) 0.0))}))
+
+(defn- apply-constraints!
+  "Resolves and activates `constraints` (a vector of constraint tuples) on
+  `container-view` using `child-nodes` for symbolic key resolution."
+  [container-view child-nodes constraints]
+  (let [kv    (constraint-key->view container-view child-nodes)
+        specs (mapv #(parse-constraint-tuple kv %) constraints)]
+    (layout/constrain! container-view specs)))
+
+;; =============================================================================
+;; render-tree! (Phase 4.2→6.3)
+;; =============================================================================
+
+(defn- render-tree!
+  "Creates a UIKit view tree from `hiccup-node` and adds it as a subview of
+  `parent-view`.  Returns a rendered-node map.
+
+  Rendered-node shape: `{:tag kw :props map :key kw-or-nil :view ptr :rk rk :children [node...]}`
+
+  When `:constraints` is present on a vector node, activates the Auto Layout
+  constraints on the container after all children are created.  `:key` and
+  `:constraints` are stripped from the stored `:props` map."
+  [parent-view hiccup-node]
+  (cond
+    (string? hiccup-node)
+    (let [view (create-element :label {:text hiccup-node})
+          rk   (-> view meta ::retain-key)]
+      (objc-rt/msg-send :void parent-view "addSubview:" :pointer view)
+      {:tag :label :props {:text hiccup-node} :key nil :view view :rk rk :children []})
+
+    (vector? hiccup-node)
+    (let [[tag all-props children] (normalize-hiccup hiccup-node)
+          k           (:key all-props)
+          constraints (:constraints all-props)
+          props       (dissoc all-props :key :constraints)
+          view        (create-element tag props)
+          rk          (-> view meta ::retain-key)
+          _           (objc-rt/msg-send :void parent-view "addSubview:" :pointer view)
+          child-nodes (mapv #(render-tree! view %) children)]
+      (when constraints
+        (apply-constraints! view child-nodes constraints))
+      {:tag tag :props props :key k :view view :rk rk :children child-nodes})
 
     :else
-    (throw (ex-info "Unrecognised hiccup node" {:node node}))))
+    (throw (ex-info "Unrecognised hiccup node" {:node hiccup-node}))))
 
-(defn- teardown! [root-key]
-  (when-let [rks (get @render-roots root-key)]
-    (doseq [rk rks]
-      (retain/release! rk)))
-  (swap! render-roots dissoc root-key))
+(defn- reconcile!
+  "Reconciles `old-node` with `new-hiccup` under `parent-view`.
+  - Same tag: patches only changed props and reconciles children in-place.
+  - Different tag: removes old subtree, builds a fresh one.
+  Returns the new rendered-node.
+
+  `:key` and `:constraints` are stripped from the stored `:props`; constraints
+  are not re-applied during reconciliation (they are static at mount time)."
+  [parent-view old-node new-hiccup]
+  (let [[new-tag all-new-props new-children]
+        (if (string? new-hiccup)
+          [:label {:text new-hiccup} []]
+          (normalize-hiccup new-hiccup))
+        new-key   (:key all-new-props)
+        new-props (dissoc all-new-props :key :constraints)]
+    (if (not= (:tag old-node) new-tag)
+      (do
+        (objc-rt/msg-send :void (:view old-node) "removeFromSuperview")
+        (release-rendered! old-node)
+        (render-tree! parent-view new-hiccup))
+      (let [view     (:view old-node)
+            old-kids (:children old-node)
+            n-old    (count old-kids)
+            n-new    (count new-children)
+            shared   (min n-old n-new)]
+        (doseq [[k v] new-props]
+          (when (not= v (get (:props old-node) k))
+            (apply-prop! view k v)))
+        (let [reconciled (mapv #(reconcile! view %1 %2)
+                               (take shared old-kids)
+                               (take shared new-children))
+              added      (mapv #(render-tree! view %)
+                               (drop shared new-children))]
+          (doseq [extra (drop shared old-kids)]
+            (objc-rt/msg-send :void (:view extra) "removeFromSuperview")
+            (release-rendered! extra))
+          {:tag new-tag :props new-props :key new-key :view view
+           :rk (:rk old-node) :children (into reconciled added)})))))
 
 (defn render!
   "Renders `hiccup-tree` as a UIKit subtree under `root-view`.
 
-  The first call populates `root-view` with the rendered tree and associates
-  it with `root-key`.  Subsequent calls with the same key tear down the
-  previous subtree (removing subviews) and render fresh.
+  On the first render for `root-key`, clears all existing subviews of
+  `root-view` and builds the tree from scratch.  On subsequent renders,
+  performs an incremental reconciliation — patching changed props and
+  adding/removing children — without tearing down unchanged branches.
 
   All UIKit operations run synchronously on the calling thread.  Wrap in
   `grease/dispatch-main-async` when calling from a background thread.
 
   Returns `root-view`."
   [root-key root-view hiccup-tree]
-  (teardown! root-key)
-  ;; Remove all existing subviews
-  (let [subs (f/nsarray->vec (objc-rt/msg-send :pointer root-view "subviews"))]
-    (doseq [sv subs]
-      (objc-rt/msg-send :void sv "removeFromSuperview")))
-  ;; Render fresh
-  (let [before-count (retain/retained-count)]
-    (render-node! root-view hiccup-tree)
-    (let [new-rks (drop before-count (retain/retained-keys))]
-      (swap! render-roots assoc root-key (vec new-rks))))
+  (if-let [old-node (get @rendered-trees root-key)]
+    (let [new-node (reconcile! root-view old-node hiccup-tree)]
+      (swap! rendered-trees assoc root-key new-node))
+    (do
+      (let [subs (f/nsarray->vec (objc-rt/msg-send :pointer root-view "subviews"))]
+        (doseq [sv subs]
+          (objc-rt/msg-send :void sv "removeFromSuperview")))
+      (let [node (render-tree! root-view hiccup-tree)]
+        (swap! rendered-trees assoc root-key node))))
   root-view)
+
+(defn mount!
+  "Reactively mounts a hiccup view under `root-view`, re-rendering automatically
+  whenever any atom in `atoms` changes.
+
+  - `root-key`  — unique keyword or symbol identifying this mount point
+  - `root-view` — UIView to render into
+  - `atoms`     — sequence of `clojure.lang.Atom` instances to watch
+  - `render-fn` — `(fn [] hiccup-tree)` called with no args on each render pass
+
+  A `volatile!` pending flag coalesces rapid atom changes into a single
+  main-thread render pass.
+
+  Returns `root-view`."
+  [root-key root-view atoms render-fn]
+  (let [pending?  (volatile! false)
+        watch-fn  (fn [_ _ _ _]
+                    (when-not @pending?
+                      (vreset! pending? true)
+                      (grease/dispatch-main-async
+                       (fn []
+                         (vreset! pending? false)
+                         (render! root-key root-view (render-fn))))))
+        watch-pairs (mapv (fn [a]
+                            (let [wk (gensym "mount-")]
+                              (add-watch a wk watch-fn)
+                              [a wk]))
+                          atoms)]
+    (swap! mount-watches assoc root-key watch-pairs)
+    (grease/dispatch-main-async
+     #(render! root-key root-view (render-fn)))
+    root-view))
+
+(defn unmount!
+  "Removes all reactive watches for `root-key` and tears down the rendered subtree.
+
+  Safe to call if the key is not currently mounted."
+  [root-key]
+  (when-let [watch-pairs (get @mount-watches root-key)]
+    (doseq [[a wk] watch-pairs]
+      (remove-watch a wk))
+    (swap! mount-watches dissoc root-key))
+  (teardown-rendered! root-key))

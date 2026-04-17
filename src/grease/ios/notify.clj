@@ -17,8 +17,8 @@
   least one subscriber exists for a given notification name, and removed
   automatically when the last subscriber calls [[off]]."
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [com.phronemophobic.grease :as grease]
+            [grease.ios-host :as host]
             [grease.ios.foundation :as f]
             [grease.ios.objc :as objc-rt]))
 
@@ -29,7 +29,7 @@
 (def ^:private notification-names
   "Map of keyword → {:objc \"UINotificationNameString\"}, loaded from EDN."
   (delay
-    (edn/read-string (slurp (io/resource "grease/notifications.edn")))))
+    (edn/read-string (host/read-resource "grease/notifications.edn"))))
 
 (defn- resolve-objc-name
   "Returns the ObjC notification name string for `k`.

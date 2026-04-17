@@ -16,22 +16,22 @@
       (is (= 42 @r)))))
 
 (deftest ^:parallel kvoref-add-watch-test
-  (testing "add-watch fires when internal atom is reset"
+  (testing "add-kvo-watch fires when internal atom is reset"
     (let [r       (make-test-ref 0)
           changes (atom [])]
-      (add-watch r ::test (fn [_ _ old new]
-                            (swap! changes conj [old new])))
+      (kvo/add-kvo-watch r ::test (fn [_ _ old new]
+                                    (swap! changes conj [old new])))
       ;; simulate a KVO callback updating the atom
       (reset! (.-internal r) 99)
       (is (= [[0 99]] @changes)))))
 
 (deftest ^:parallel kvoref-remove-watch-test
-  (testing "remove-watch stops firing"
+  (testing "remove-kvo-watch stops firing"
     (let [r       (make-test-ref 0)
           changes (atom [])]
-      (add-watch r ::test (fn [_ _ old new]
-                            (swap! changes conj [old new])))
-      (remove-watch r ::test)
+      (kvo/add-kvo-watch r ::test (fn [_ _ old new]
+                                    (swap! changes conj [old new])))
+      (kvo/remove-kvo-watch r ::test)
       (reset! (.-internal r) 5)
       (is (= [] @changes)))))
 

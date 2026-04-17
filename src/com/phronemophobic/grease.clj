@@ -264,6 +264,9 @@
       (sci/alter-var-root sci/out (constantly *out*))
       (sci/alter-var-root sci/err (constantly *err*))
       ;; Pre-load grease.ios.* so they are available from nREPL without rebuild.
+      ;; retain must come first — foundation.clj requires it.
+      (when-let [src (io/resource "grease/ios/retain.clj")]
+        (sci/eval-string* ctx (slurp src)))
       (when-let [src (io/resource "grease/ios/objc.clj")]
         (sci/eval-string* ctx (slurp src)))
       (when-let [src (io/resource "grease/ios/foundation.clj")]
@@ -278,6 +281,23 @@
         (sci/eval-string* ctx (slurp src)))
       (when-let [src (io/resource "grease/ios/camera.clj")]
         (sci/eval-string* ctx (slurp src)))
+      ;; Idiom layer — coercion, hiccup, screen, KVO, etc.
+      ;; retain is already loaded above; load the rest in dependency order.
+      ;; Wrapped in try-catch so a load error doesn't block the nREPL.
+      ;; Idiom layer (part 1) — no dependency on engine/invoke.
+      (try
+        (doseq [path ["grease/ios/color.clj"
+                      "grease/ios/font.clj"
+                      "grease/ios/delegate.clj"
+                      "grease/ios/kvo.clj"
+                      "grease/ios/notify.clj"
+                      "grease/ios/completion.clj"]]
+          (if-let [src (io/resource path)]
+            (sci/eval-string* ctx (slurp src))
+            (nlog (str "  [idiom] WARNING: resource not found: " path))))
+        (nlog "  [idiom] Phase 1 loaded (color/font/delegate/kvo/notify/completion).")
+        (catch Exception e
+          (nlog (str "  [idiom] WARNING: phase 1 preload failed: " (.getMessage e)))))
       ;; Engine — data-driven API (dependency order: types first, api last).
       ;; Wrapped in try-catch so that a load error is logged but does not
       ;; prevent the nREPL from starting.
@@ -301,6 +321,21 @@
         (catch Exception e
           (reset! engine-load-error {:message (.getMessage e) :ex (str e)})
           (nlog (str "  [engine] WARNING: engine preload failed: " (.getMessage e)))))
+      ;; Idiom layer (part 2) — layout/hiccup/anim/screen/nav depend on engine/invoke.
+      ;; layout must load before hiccup (hiccup requires grease.ios.layout).
+      ;; nav must load after screen (nav requires grease.ios.hiccup + screen spec shape).
+      (try
+        (doseq [path ["grease/ios/layout.clj"
+                      "grease/ios/hiccup.clj"
+                      "grease/ios/anim.clj"
+                      "grease/ios/screen.clj"
+                      "grease/ios/nav.clj"]]
+          (if-let [src (io/resource path)]
+            (sci/eval-string* ctx (slurp src))
+            (nlog (str "  [idiom] WARNING: resource not found: " path))))
+        (nlog "  [idiom] Phase 2 loaded (hiccup/anim/layout/screen).")
+        (catch Exception e
+          (nlog (str "  [idiom] WARNING: phase 2 preload failed: " (.getMessage e)))))
       ;; Override clojure.core/load-file to support http/https URLs in addition to
       ;; classpath resources. The fetch runs on the JVM side (not SCI), so full
       ;; java.net networking is available. From the nREPL:

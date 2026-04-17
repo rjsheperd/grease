@@ -43,4 +43,10 @@
   ;; UIControlEventValueChanged = 1<<12 = 4096
   :on-change    {:control-event 4096}
   ;; UIControlEventEditingChanged = 1<<16 = 65536
-  :on-edit      {:control-event 65536}}}
+  :on-edit      {:control-event 65536}
+
+  ;; ── Tree-level metadata (handled by render-tree!, not apply-prop!) ──────────
+  ;; :key         — symbolic name for referencing this view from :constraints
+  ;; :constraints — vector of constraint tuples; see grease.ios.hiccup/render-tree!
+  :key         {:special :identity}
+  :constraints {:special :identity}}}

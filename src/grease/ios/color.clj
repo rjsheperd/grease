@@ -10,23 +10,34 @@
   Keyword and pointer dispatch require an active ObjC runtime; tag those
   tests ~^:integration~. The hex parser and vector path are pure Clojure."
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [com.phronemophobic.grease :as grease]
-            [grease.ios.objc :as objc-rt]))
+            [grease.ios-host :as host]
+            [grease.ios.objc :as objc-rt]
+            [tech.v3.datatype.ffi :as dt-ffi]))
 
 ;; ── Color name table ────────────────────────────────────────────────────────
 
 (def ^:private color-selectors
   "Map of keyword → UIColor class-method selector string, loaded from EDN."
   (delay
-    (edn/read-string (slurp (io/resource "grease/colors.edn")))))
+    (edn/read-string (host/read-resource "grease/colors.edn"))))
 
 ;; ── Hex string parser ───────────────────────────────────────────────────────
+
+(defn- hex-digit
+  "Return the integer value of a single hex character (0–15)."
+  [^Character c]
+  (let [n (int c)]
+    (cond
+      (<= (int \0) n (int \9)) (- n (int \0))
+      (<= (int \a) n (int \f)) (+ 10 (- n (int \a)))
+      (<= (int \A) n (int \F)) (+ 10 (- n (int \A)))
+      :else (throw (ex-info (str "Invalid hex digit: " c) {:char c})))))
 
 (defn- hex-pair->double
   "Parse two hex characters starting at `idx` in string `s`, return 0.0–1.0."
   [s idx]
-  (/ (Long/parseLong (subs s idx (+ idx 2)) 16) 255.0))
+  (/ (double (+ (* 16 (hex-digit (nth s idx))) (hex-digit (nth s (inc idx))))) 255.0))
 
 (defn- parse-hex
   "Parse a CSS-style hex color string into [r g b a] doubles (0.0–1.0).
@@ -66,9 +77,6 @@
   Throws `ex-info` for unrecognised input."
   [spec]
   (cond
-    ;; Already a pointer — idempotent
-    (instance? tech.v3.datatype.ffi.Pointer spec) spec
-
     ;; Keyword — class method on UIColor
     (keyword? spec)
     (let [sel (get @color-selectors spec)]
@@ -102,6 +110,9 @@
                           (grease/get-objc-class "UIColor")
                           "colorWithRed:green:blue:alpha:"
                           :float64 r :float64 g :float64 b :float64 a)))
+
+    ;; Already a pointer — idempotent
+    (dt-ffi/convertible-to-pointer? spec) spec
 
     :else
     (throw (ex-info (str "Cannot coerce to UIColor: " (pr-str spec))
