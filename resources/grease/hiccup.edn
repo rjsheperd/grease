@@ -1,0 +1,46 @@
+{:tags
+ {:view   {:class "UIView"}
+  :label  {:class "UILabel"}
+  :button {:class "UIButton" :factory "buttonWithType:" :factory-arg 0}
+  :field  {:class "UITextField"}
+  :text   {:class "UITextView"}
+  :image  {:class "UIImageView"}
+  :scroll {:class "UIScrollView"}
+  :stack  {:class "UIStackView"}}
+
+ :props
+ ;; ── Color / appearance ──────────────────────────────────────────────────────
+ {:bg           {:sel "setBackgroundColor:"  :coerce :ui-color}
+  :tint         {:sel "setTintColor:"        :coerce :ui-color}
+  :text-color   {:sel "setTextColor:"        :coerce :ui-color}
+
+  ;; ── Text content ────────────────────────────────────────────────────────────
+  :text         {:sel "setText:"             :coerce :ns-string}
+  :placeholder  {:sel "setPlaceholder:"      :coerce :ns-string}
+  :font         {:sel "setFont:"             :coerce :ui-font}
+  :align        {:sel "setTextAlignment:"    :arg-type :int64}
+  :lines        {:sel "setNumberOfLines:"    :arg-type :int64}
+
+  ;; ── Layout ──────────────────────────────────────────────────────────────────
+  :frame        {:special :set-frame}
+  :hidden       {:sel "setHidden:"           :arg-type :int64}
+  :alpha        {:sel "setAlpha:"            :arg-type :float64}
+  :clip         {:sel "setClipsToBounds:"    :arg-type :int64}
+  :content-mode {:sel "setContentMode:"      :arg-type :int64}
+
+  ;; ── Layer (CALayer) ─────────────────────────────────────────────────────────
+  :corner       {:target :layer :sel "setCornerRadius:"  :arg-type :float64}
+  :border-width {:target :layer :sel "setBorderWidth:"   :arg-type :float64}
+  :border-color {:target :layer :sel "setBorderColor:"   :coerce :cg-color}
+
+  ;; ── UIStackView ─────────────────────────────────────────────────────────────
+  :axis         {:sel "setAxis:"             :arg-type :int64}
+  :spacing      {:sel "setSpacing:"          :arg-type :float64}
+
+  ;; ── Control events ──────────────────────────────────────────────────────────
+  ;; UIControlEventTouchUpInside = 1<<6 = 64
+  :on-tap       {:control-event 64}
+  ;; UIControlEventValueChanged = 1<<12 = 4096
+  :on-change    {:control-event 4096}
+  ;; UIControlEventEditingChanged = 1<<16 = 65536
+  :on-edit      {:control-event 65536}}}

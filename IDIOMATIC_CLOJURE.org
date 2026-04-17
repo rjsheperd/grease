@@ -287,7 +287,7 @@ Register callback; if first subscriber, wire internal observer via
 :depends: Phase 0.2, Phase 0.3
 :END:
 
-** TODO 4.1 Tag registry and element creation
+** DONE 4.1 Tag registry and element creation
 :PROPERTIES:
 :file: src/grease/ios/hiccup.clj + resources/grease/hiccup.edn
 :loc: ~300 impl + ~100 EDN
@@ -317,12 +317,12 @@ Tag registry excerpt:
 (coerce value, call ~msg-send~; handle ~:special~ and ~:target :layer~ cases; wire
 event handlers via target-action dispatch table). Retain view in registry.
 
-** TODO 4.2 Naive reconciler
+** DONE 4.2 Naive reconciler
 
 ~(render! root-key hiccup-vec)~: first call renders fresh; subsequent calls tear down
 old tree, render new one. All UIKit work on main thread via ~dispatch-main-async~.
 
-** TODO 4.3 Smart reconciler + reactive bindings
+** TODO 4.3 Smart reconciler + reactive bindings  [future work]
 :PROPERTIES:
 :depends: Phase 2
 :END:
