@@ -345,7 +345,7 @@ debounce to one render per animation frame, apply diff patch.
 arguments. Both are wrappable via the existing ~make-void-block~ factory — *no new C
 shims required*.
 
-** TODO 5.1 ~(animate opts body-fn)~
+** DONE 5.1 ~(animate opts body-fn)~
 
 #+begin_src clojure
 (animate {:duration 0.3 :curve :ease-in-out}
@@ -358,16 +358,16 @@ Wrap ~body-fn~ in a void block; call
 ~UIView animateWithDuration:delay:options:animations:completion:~ via ~msg-send~.
 Return promise resolving when completion block fires.
 
-** TODO 5.2 ~(spring opts body-fn)~
+** DONE 5.2 ~(spring opts body-fn)~
 
 ~{:duration 0.5 :damping 0.7 :velocity 1.0}~. Uses
 ~animateWithDuration:delay:usingSpringWithDamping:…~.
 
-** TODO 5.3 ~(sequence & [opts fn] ...)~
+** DONE 5.3 ~(chain & [opts fn] ...)~  [named chain to avoid clojure.core/sequence clash]
 
 Chain animations: completion of N starts N+1. Return promise for final completion.
 
-** TODO 5.4 ~anim->~ threading macro
+** DONE 5.4 ~anim->~ threading macro
 
 #+begin_src clojure
 (animate {:duration 0.3}
@@ -379,7 +379,7 @@ Chain animations: completion of N starts N+1. Return promise for final completio
 
 Expands to a ~fn []~ body calling ~set-alpha!~, ~set-frame!~, ~set-background-color!~.
 
-** TODO 5.5 Curve keyword → options integer
+** DONE 5.5 Curve keyword → options integer
 
 #+begin_src clojure
 {:ease-in-out  0x00000000
