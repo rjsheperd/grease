@@ -210,7 +210,7 @@ produces identical state transitions.
 ~addObserver:forKeyPath:options:context:~ / ~removeObserver:forKeyPath:~ are pure
 ~msg-send~ calls — no struct shims needed.
 
-** TODO 2.1 Internal observer class
+** DONE 2.1 Internal observer class
 
 ~defclass!~ a ~GreaseKVOObserver~ once at module load with method
 ~observeValueForKeyPath:ofObject:change:context:~ (~"v@:@@@@"~). Its IMP dispatches
@@ -218,7 +218,7 @@ to a Clojure dispatch table atom ~{context-id → callback-fn}~.
 
 Context IDs: a global counter atom (simplest; no pointer fragility).
 
-** TODO 2.2 ~(observe obj key-path)~
+** DONE 2.2 ~(observe obj key-path)~
 
 Returns a value implementing ~IDeref~ and ~IRef~ (~add-watch~ / ~remove-watch~).
 
@@ -230,18 +230,18 @@ On creation:
 
 ~deref~ returns current value. ~add-watch~ / ~remove-watch~ delegate to the internal atom.
 
-** TODO 2.3 ~(release! observable)~
+** DONE 2.3 ~(release! observable)~
 
 - ~removeObserver:forKeyPath:~ on original object
 - Remove from dispatch table and retention registry
 - Notify all watches with ~nil~ (signals observation ended)
 
-** TODO 2.4 ~(reaction expr-fn & observables)~
+** DONE 2.4 ~(reaction expr-fn & observables)~
 
 Derived ref: re-evaluates ~expr-fn~ whenever any input changes; only fires watches when
 the *derived* value changes.
 
-** TODO 2.5 Tests
+** DONE 2.5 Tests
 
 JVM: simulate KVO notification via direct dispatch-table call; verify ~deref~ and
 ~add-watch~ fire. Integration: observe UIView ~alpha~ property, change it, verify
