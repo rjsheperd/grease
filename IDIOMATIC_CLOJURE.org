@@ -433,14 +433,14 @@ On re-render: deactivate old constraints, activate new ones.
 :loc: ~100
 :END:
 
-** TODO 7.1 ~(with-completion block-type)~
+** DONE 7.1 ~(with-completion block-type)~
 
 Returns ~[block-ptr promise]~. When iOS invokes the block, delivers the coerced result
 to the promise. Block pointer retained automatically.
 
 Types: ~:void~, ~:data~, ~:bool-error~ (matching existing block factories).
 
-** TODO 7.2 ~let-completion~ macro
+** DONE 7.2 ~let-completion~ macro
 
 #+begin_src clojure
 (let-completion [data (fetch-url! "https://…")
@@ -451,7 +451,7 @@ Types: ~:void~, ~:data~, ~:bool-error~ (matching existing block factories).
 Expands to nested ~let~ + ~deref~ with timeout (default 30 s). Throws on timeout or
 error delivery.
 
-** TODO 7.3 Common wrappers
+** DONE 7.3 Common wrappers
 
 - ~(fetch-url! url)~ → promise of ~{:data … :response … :error …}~
 - ~(request-authorization! media-type)~ → promise of boolean

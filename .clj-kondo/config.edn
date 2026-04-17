@@ -3,4 +3,6 @@
  :lint-as {grease.ios.objc/defclass        clojure.core/def
            grease.ios.repl/defclass!       clojure.core/def
            ;; with-retained uses let-style bindings as its first arg
-           grease.ios.foundation/with-retained clojure.core/let}}
+           grease.ios.foundation/with-retained  clojure.core/let
+           ;; let-completion uses let-style bindings (first or second arg)
+           grease.ios.completion/let-completion clojure.core/let}}
