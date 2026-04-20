@@ -1,0 +1,795 @@
+#+TITLE: Grease Android Port — Clojure nREPL on Android
+#+AUTHOR: RJ Sheperd
+#+DATE: 2026-04-20
+
+* Context
+
+Grease runs a live Clojure nREPL on iPhone by compiling Clojure → GraalVM
+native-image → ~bb.o~ (iOS arm64 relocatable object) → linked into an Xcode
+~.app~. This document plans the parallel port to Android, enabling:
+
+#+BEGIN_SRC bash
+adb forward tcp:23456 tcp:23456
+clj -M:repl/android   # connects to nREPL on device
+#+END_SRC
+
+Key discovery: GraalVM's ~Platform.java~ already defines ~ANDROID_AARCH64~
+(line 353 of ~graal/sdk/src/org.graalvm.nativeimage/src/org/graalvm/nativeimage/Platform.java~).
+The port is entirely additive — no iOS files change.
+
+* Architecture
+
+The iOS pipeline maps to Android with four surgical substitutions:
+
+| Stage | iOS | Android |
+|-------+-----+---------|
+| JDK static libs | ~ios-graal-jdk-21/~ (Xcode + iOS SDK) | ~openjdk-mobile/~ (NDK clang, ~--openjdk-target=aarch64-linux-android~) |
+| native-image output | Relocatable ~bb.o~ (~-H:+ExitAfterRelocatableImageWrite~) | Shared library ~bb.so~ (drop that flag) |
+| Platform flag | ~-Dsvm.platform=...IOS_AARCH64~ | ~-Dsvm.platform=...ANDROID_AARCH64~ |
+| App packaging | Xcode project (~.app~) | Gradle Android project (~.apk~) |
+| C bridge | ~Bridge.m~ (ObjC + GCD) | ~bridge.c~ (pure C + pthread) |
+| nREPL connect | WiFi direct (~device-ip:23456~) | ~adb forward tcp:23456 tcp:23456~ |
+| Main-thread dispatch | ~dispatch_async(_dispatch_main_q, ...)~ | ~Handler(Looper.getMainLooper()).post(Runnable)~ via JNI shim |
+
+What does *not* change: nREPL server, SCI interpreter, ~clj-libffi~, dtype-next
+FFI, ~deps.edn~ dependencies, all domain Clojure logic.
+
+* Phase 1 — nREPL MVP (No UI)
+
+** 1.0  Prerequisites
+
+*** TODO Install Android NDK r27
+
+NDK is not yet present in ~/Volumes/MegaDisk2TB/Android/~.
+
+#+BEGIN_SRC bash
+/Volumes/MegaDisk2TB/Android/cmdline-tools/bin/sdkmanager "ndk;27.2.12479018"
+# Installs to /Volumes/MegaDisk2TB/Android/ndk/27.2.12479018/
+#+END_SRC
+
+Set env vars (add to ~.envrc~ or equivalent):
+#+BEGIN_SRC bash
+export NDK_HOME=/Volumes/MegaDisk2TB/Android/ndk/27.2.12479018
+export NDK_TOOLCHAIN=$NDK_HOME/toolchains/llvm/prebuilt/darwin-arm64
+export ANDROID_CC=$NDK_TOOLCHAIN/bin/aarch64-linux-android35-clang
+#+END_SRC
+
+*** TODO Verify boot JDK ≥ 24 is available
+
+~openjdk-mobile~ requires JDK 24+ as boot JDK (same requirement as
+~build-ios-static-libs~). Check:
+
+#+BEGIN_SRC bash
+java -version 2>&1   # must be ≥ 24, or set BOOT_JDK explicitly
+# brew install --cask temurin@24  if missing
+#+END_SRC
+
+*** TODO Verify autoconf is installed
+
+#+BEGIN_SRC bash
+autoconf --version || brew install autoconf
+#+END_SRC
+
+** 1.1  Build libffi for Android
+
+*Reference*: ~build-ios-static-libs~ Phase A downloads ~mobile-support.zip~
+(Gluon's pre-built libffi for iOS). No Android equivalent exists, so build
+libffi from source.
+
+*Source*: ~../libffi/~ (already cloned at
+~/Volumes/MegaDisk2TB/Code/rjsheperd/clj-ios/libffi/~).
+
+*** TODO Configure libffi with NDK clang
+
+#+BEGIN_SRC bash
+cd /Volumes/MegaDisk2TB/Code/rjsheperd/clj-ios/libffi
+./autogen.sh   # if configure script not present
+CC=$ANDROID_CC \
+./configure \
+  --host=aarch64-linux-android \
+  --prefix=$PWD/install-android-aarch64 \
+  --with-sysroot=$NDK_TOOLCHAIN/sysroot
+#+END_SRC
+
+*** TODO Build and install libffi
+
+#+BEGIN_SRC bash
+make -j$(sysctl -n hw.ncpu)
+make install
+# Output: install-android-aarch64/lib/libffi.a
+#         install-android-aarch64/include/ffi.h
+#+END_SRC
+
+*** TODO Verify ELF output
+
+#+BEGIN_SRC bash
+file install-android-aarch64/lib/libffi.a
+# Must report: ELF 64-bit LSB relocatable, ARM aarch64
+#+END_SRC
+
+** 1.2  Build Android JDK Static Libraries
+
+*Reference*: ~scripts/build-ios-static-libs~.
+*Source*: already cloned at
+~/Volumes/MegaDisk2TB/Code/rjsheperd/clj-ios/openjdk-mobile/~.
+
+~flags-cflags.m4~ (line 461) auto-sets ~-target aarch64-linux-android32 -DLINUX -DANDROID~
+when ~--openjdk-target=aarch64-linux-android~ is detected.
+
+*New file*: ~scripts/build-android-static-libs~
+
+*** TODO Write build-android-static-libs script
+
+Model on ~build-ios-static-libs~. Key differences:
+
+| Phase | iOS | Android |
+|-------+-----+---------|
+| Phase A (support deps) | Download ~mobile-support.zip~ (libffi + cups) | Use libffi built in 1.1 above; no cups needed |
+| Phase B (clone source) | ~git clone openjdk/mobile~ into ~build/openjdk-mobile~ | Use existing ~openjdk-mobile/~ clone (already present) |
+| Phase C (configure) | ~--openjdk-target=aarch64-macos-ios~ + ~--with-cups-include~ | ~--openjdk-target=aarch64-linux-android~ + ~--with-sysroot~ |
+| Phase C.5 (patch) | ~gzguts.h~: add ~#include <unistd.h>~ for clang 17+ | Same patch applies — check if already present |
+| Phase D (make) | ~CONF=ios-aarch64-zero-release~ | ~CONF=android-aarch64-zero-release~ |
+| Phase E (copy) | Copy to ~build/staticjdk-ios-jdk21/~ + ~lib/ios-arm64-jdk-21/~ | Copy to ~build/staticjdk-android-arm64/~ + ~lib/android-arm64/~ |
+
+Full configure call:
+#+BEGIN_SRC bash
+LIBFFI_DIR=/Volumes/MegaDisk2TB/Code/rjsheperd/clj-ios/libffi/install-android-aarch64
+sh configure \
+  --disable-warnings-as-errors \
+  --openjdk-target=aarch64-linux-android \
+  --with-boot-jdk="$BOOT_JDK" \
+  --with-sysroot="$NDK_TOOLCHAIN/sysroot" \
+  --with-libffi-include="$LIBFFI_DIR/include" \
+  --with-libffi-lib="$LIBFFI_DIR/lib" \
+  --with-jvm-variants=zero
+#+END_SRC
+
+*** TODO Apply gzguts.h patch
+
+Same patch as iOS (required for clang 17+; ~build-ios-static-libs~ Phase C.5):
+#+BEGIN_SRC bash
+GZGUTS="src/java.base/share/native/libzip/zlib/gzguts.h"
+if ! grep -q '<unistd.h>' "$GZGUTS"; then
+    sed -i '' 's|#include <fcntl.h>|#include <fcntl.h>\n#include <unistd.h>|' "$GZGUTS"
+fi
+#+END_SRC
+
+*** TODO Run make static-libs-image
+
+#+BEGIN_SRC bash
+make CONF=android-aarch64-zero-release static-libs-image \
+  2>&1 | tee build/android-mobile-build.log
+# Duration: 1-2 hours
+#+END_SRC
+
+*** TODO Copy outputs to grease lib dirs
+
+#+BEGIN_SRC bash
+# JDK static libs (libjava.a, libnio.a, libnet.a, libzip.a, ...)
+mkdir -p build/staticjdk-android-arm64/lib/static
+find build/android-aarch64-zero-release/images/static-libs/lib \
+    -name "*.a" ! -path "*/zero/*" \
+    -exec cp {} build/staticjdk-android-arm64/lib/static/ \;
+
+# Zero JVM
+mkdir -p lib/android-arm64
+cp build/android-aarch64-zero-release/images/static-libs/lib/zero/libjvm.a \
+   lib/android-arm64/libjvm.a
+#+END_SRC
+
+*** TODO Verify ELF output
+
+#+BEGIN_SRC bash
+file build/staticjdk-android-arm64/lib/static/libjava.a
+# Must report: ELF 64-bit LSB relocatable, ARM aarch64 (not Mach-O)
+#+END_SRC
+
+** 1.3  GraalVM Config Files
+
+*New files* — start as copies of the iOS variants; all entries are
+platform-agnostic Java/Clojure classes.
+
+*** TODO Copy iOS config files to Android variants
+
+#+BEGIN_SRC bash
+cp conf/reflectionconfig-arm64-ios.json conf/reflectionconfig-arm64-android.json
+cp conf/jniconfig-arm64-ios.json        conf/jniconfig-arm64-android.json
+cp conf/resourceconfig-arm64-ios.json   conf/resourceconfig-arm64-android.json
+#+END_SRC
+
+*** TODO Remove any iOS-only entries
+
+Audit ~reflectionconfig-arm64-android.json~ and remove any classes that only
+exist on Darwin (e.g. ~java.net.MacOSXSocketOptions~ JNI entries if present).
+Android JDK built from openjdk-mobile provides its own socket implementations.
+
+** 1.4  grease_android.clj
+
+*New file*: ~src/com/phronemophobic/grease_android.clj~
+*Reference*: ~src/com/phronemophobic/grease.clj~
+
+*** TODO Create grease_android.clj by stripping iOS-specific sections
+
+Sections to change from ~grease.clj~:
+
+| Change | Location in grease.clj | Reason |
+|--------+------------------------+--------|
+| Remove ~objcjure~ from ~:require~ | ns form | ObjC DSL unavailable on Android |
+| Remove ~get-objc-class~, ~allocate-objc-class!~, ~register-objc-class!~, ~register-objc-sel~, ~add-objc-method!~, ~objc-new~, ~make-imp~ from sci ns map | SCI namespace map section | ~objc_msgSend~ absent |
+| Remove ObjC block factory shims (~grease_make_void_block~ etc.) from sci ns map | SCI namespace map section | No ObjC blocks on Android |
+| Replace ~dispatch-main-async~ body (calls ~dispatch_get_main_queue~ via ~ffi/dlsym~) with ~pthread_create~ stub | ~dispatch-main-async~ fn | GCD symbol absent |
+| Change ~get-addresses~ WiFi filter from prefix ~"en"~ to ~"wlan"~ | ~get-addresses~ fn | Android WiFi is ~wlan0~ not ~en0~ |
+| Replace ~grease.ios-host~ entry in SCI ns map with ~grease.android-host~ | SCI namespace map | Platform resource shim |
+| Remove iOS-specific preloads (~grease/ios/bluetooth~, ~grease/ios/camera~, all ~grease/ios/*~) from SCI startup sequence | load-namespaces section | iOS namespaces won't compile on Android |
+
+Keep unchanged:
+- All nREPL bootstrap (~clj_start_server~, ~sci-ctx~, ~clj_eval~, ~clj_nrepl_port~, C entry points)
+- ~compile-interface-class~ and all C entry point exports
+- ~ptr-address~, ~c->string~, ~string->c~, ~convertible-to-pointer?~
+- ~native-malloc~, ~native-write-long~, ~struct-*~ JVM bridges
+- ~get-current-thread~, ~register-objc-sel~ (can stub to no-op for now)
+
+*** TODO Add uberjar-android target to build.clj
+
+#+BEGIN_SRC clojure
+(def android-basis
+  (delay (b/create-basis {:project "deps.edn"
+                          :aliases [:native-image]})))
+
+(defn uberjar-android [opts]
+  (b/delete {:path class-dir})
+  (b/copy-dir {:src-dirs ["src" "resources"]
+               :target-dir class-dir})
+  (b/compile-clj {:class-dir class-dir
+                  :basis @android-basis
+                  :java-opts ["-Dtech.v3.datatype.graal-native=true"
+                              "-Dclojure.compiler.direct-linking=true"
+                              "-Dclojure.spec.skip-macros=true"]
+                  :ns-compile '[com.phronemophobic.grease-android]})
+  (b/uber {:class-dir class-dir
+           :uber-file uber-file
+           :basis @android-basis
+           :main 'com.phronemophobic.grease-android}))
+#+END_SRC
+
+** 1.5  Build bb.so (native-image, Android target)
+
+*Reference*: ~scripts/build-bb-o~.
+*New file*: ~scripts/build-bb-android~
+
+*** TODO Write build-bb-android script
+
+Model on ~build-bb-o~. Key differences:
+
+| Section | iOS (~build-bb-o~) | Android (~build-bb-android~) |
+|---------+--------------------+------------------------------|
+| Lib sync | Syncs ~libjava.a~ etc. from ~ios-graal-jdk-21~ to ~lib/ios-arm64/~ | Syncs from ~build/staticjdk-android-arm64/~ to ~lib/android-arm64/~ |
+| Step 1 (uberjar) | ~clojure -T:build uberjar-basic~ | ~clojure -T:build uberjar-android~ |
+| Platform flag | ~-Dsvm.platform=...IOS_AARCH64~ | ~-Dsvm.platform=...ANDROID_AARCH64~ |
+| Remove | ~-H:+ExitAfterRelocatableImageWrite~ | Produces ~bb.so~ directly |
+| Remove | ~-H:PageSize=16384~ | Android defaults to 4K |
+| Remove | ~-Dsvm.targetName=iOS~, ~-Dsvm.targetArch=arm64~ | Android-target metadata not needed |
+| Step 3 (xcconfig) | Writes ~ios-link.xcconfig~ | Writes ~android-link.txt~ (library list for CMakeLists) |
+| Cross-linker | macOS host clang (iOS toolchain via Xcode) | Set ~CC=$ANDROID_CC~ before invoking native-image |
+
+*** TODO Set CC to NDK clang before native-image invocation
+
+#+BEGIN_SRC bash
+export CC=$NDK_TOOLCHAIN/bin/aarch64-linux-android35-clang
+export LIBRARY_PATH=$PROJECT_DIR/lib/android-arm64:$PROJECT_DIR/build/staticjdk-android-arm64/lib/static
+#+END_SRC
+
+GraalVM's ~SubstrateOptions~ selects bionic libc automatically when
+~ANDROID_AARCH64~ is active.
+
+*** TODO Handle ham_fisted reify class list
+
+Same logic as ~build-bb-o~ lines 194–198 — extract ~$reify~ class names from
+uberjar and force build-time init. Copy verbatim; this is platform-neutral.
+
+*** TODO Write android-link.txt (replaces ios-link.xcconfig)
+
+Instead of an xcconfig, write a flat list of ~-l~ and ~-L~ flags for
+CMakeLists consumption:
+
+#+BEGIN_SRC bash
+cat > "$OUT_DIR/android-link.txt" << EOF
+-L$LOCAL_LIBS_DIR
+-L$PROJECT_DIR/build/staticjdk-android-arm64/lib/static
+-ljava -ljvm -lzip -lprefs
+-lz -ldl -lc++ -lpthread
+-landroid -llog
+EOF
+#+END_SRC
+
+*** TODO Verify bb.so
+
+#+BEGIN_SRC bash
+file build/bb-android/bb.so
+# Must report: ELF 64-bit LSB shared object, ARM aarch64
+#+END_SRC
+
+** 1.6  C Bridge (bridge.c)
+
+*New file*: ~android/app/src/main/jni/bridge.c~
+*Reference*: ~xcode/MobileTest/csource/Bridge.m~
+
+Every section of ~Bridge.m~ has a direct Android counterpart.
+
+*** TODO Port isolate/thread globals and ensure_isolate
+
+Identical to ~Bridge.m~ lines 19–20, 104–112. Pure C, no ObjC, unchanged.
+
+*** TODO Port log buffer to __android_log_print
+
+#+BEGIN_SRC c
+#include <android/log.h>
+#define LOG_TAG "Grease"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+void clj_log(const char *msg) { LOGI("[Clojure] %s", msg); }
+#+END_SRC
+
+Android Logcat reads stdout/stderr from debug builds automatically, so
+~bridge_setup_stdout_capture~ can be a no-op in Phase 1 (add pipe redirect
+in Phase 2 if needed).
+
+*** TODO Port call_* wrappers
+
+~call_sub~, ~call_add~, ~call_print~, ~call_eval~, ~call_nrepl_port~,
+~call_hash_code~ — copy verbatim from ~Bridge.m~ lines 114–157. Pure C.
+
+*** TODO Port call_start_server using pthread_create
+
+~Bridge.m~ uses ~dispatch_async~; replace with ~pthread_create~:
+
+#+BEGIN_SRC c
+#include <pthread.h>
+
+static void* _start_server_thread(void *arg) {
+    graal_isolatethread_t *bg_thread = NULL;
+    if (graal_attach_thread(isolate, &bg_thread) != 0) {
+        LOGE("graal_attach_thread failed");
+        return NULL;
+    }
+    clj_start_server(bg_thread);
+    graal_detach_thread(bg_thread);
+    return NULL;
+}
+
+void call_start_server(void) {
+    LOGI("call_start_server: entered");
+    pthread_t t;
+    pthread_create(&t, NULL, _start_server_thread, NULL);
+    pthread_detach(t);
+}
+#+END_SRC
+
+*** TODO Port clj_generic_callback and clj_get_generic_callback_address
+
+Copy verbatim from ~Bridge.m~ lines 179–197. Pure C — no ObjC, no changes.
+
+*** TODO Omit iOS-only sections
+
+Do *not* port:
+- ~MacOSXSocketOptions~ stubs (lines 209–218) — Android JDK handles its own sockets
+- ObjC block factories (~grease_make_void_block~ etc., lines 252–297) — Phase 2
+- ~grease_main_queue~ (GCD, line 307–309) — replaced by Android Handler in Phase 2
+- ~grease_map_add_circle~ (MapKit, lines 326–365) — iOS-only
+- ~objc_msgSendU64~, ~objc_make_selector~, ~objc_make_string~ (lines 220–232) — ObjC-only
+
+** 1.7  Gradle Android Project
+
+*New directory*: ~android/~
+
+*** TODO Write android/settings.gradle
+
+#+BEGIN_SRC groovy
+rootProject.name = "grease-android"
+include ':app'
+#+END_SRC
+
+*** TODO Write android/build.gradle (root)
+
+#+BEGIN_SRC groovy
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.0'
+    }
+}
+allprojects { repositories { google(); mavenCentral() } }
+#+END_SRC
+
+*** TODO Write android/app/build.gradle
+
+#+BEGIN_SRC groovy
+plugins { id 'com.android.application' }
+
+android {
+    compileSdk 35
+    defaultConfig {
+        applicationId "com.phronemophobic.grease"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "0.1"
+        externalNativeBuild {
+            cmake { path "src/main/jni/CMakeLists.txt" }
+        }
+        ndk { abiFilters "arm64-v8a" }
+    }
+    buildTypes {
+        debug { debuggable true }
+    }
+}
+#+END_SRC
+
+*** TODO Write android/app/src/main/AndroidManifest.xml
+
+#+BEGIN_SRC xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application android:label="Grease">
+        <activity android:name=".MainActivity"
+                  android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+#+END_SRC
+
+*** TODO Write GreaseJni.java
+
+#+BEGIN_SRC java
+package com.phronemophobic.grease;
+public class GreaseJni {
+    static { System.loadLibrary("grease"); }
+    public static native void startServer();
+    public static native long eval(String s);
+    public static native long nreplPort();
+}
+#+END_SRC
+
+*** TODO Write MainActivity.java
+
+#+BEGIN_SRC java
+package com.phronemophobic.grease;
+import android.app.Activity;
+import android.os.Bundle;
+
+public class MainActivity extends Activity {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        new Thread(GreaseJni::startServer).start();
+    }
+}
+#+END_SRC
+
+*** TODO Write android/app/src/main/jni/CMakeLists.txt
+
+#+BEGIN_SRC cmake
+cmake_minimum_required(VERSION 3.22)
+project(grease)
+
+# Pre-built bb.so (output of build-bb-android)
+add_library(bb SHARED IMPORTED)
+set_target_properties(bb PROPERTIES
+    IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/../jniLibs/arm64-v8a/libbb.so)
+
+# Bridge C code
+add_library(grease SHARED bridge.c)
+
+target_include_directories(grease PRIVATE
+    ${CMAKE_SOURCE_DIR}/../../../../build/bb-android)  # bb.h location
+
+target_link_libraries(grease
+    bb
+    android
+    log
+    z
+    dl
+    c++)
+#+END_SRC
+
+*** TODO Copy bb.so into jniLibs
+
+#+BEGIN_SRC bash
+mkdir -p android/app/src/main/jniLibs/arm64-v8a
+cp build/bb-android/bb.so android/app/src/main/jniLibs/arm64-v8a/libbb.so
+#+END_SRC
+
+** 1.8  deps.edn: Android REPL alias
+
+*** TODO Add :repl/android alias to deps.edn
+
+#+BEGIN_SRC clojure
+:repl/android
+{:extra-deps {nrepl/nrepl {:mvn/version "1.3.0"}}
+ :main-opts ["-m" "nrepl.cmdline" "--connect"
+             "--host" "localhost" "--port" "23456"]}
+#+END_SRC
+
+** 1.9  Full Build and Smoke Test
+
+*** TODO Run complete build sequence
+
+#+BEGIN_SRC bash
+# 1. Build Android JDK static libs (one-time, ~1-2 hours)
+./scripts/build-android-static-libs
+
+# 2. Build uberjar
+clojure -T:build uberjar-android
+
+# 3. Build bb.so (~30-60 min; supports CAP cache after first build)
+./scripts/build-bb-android
+
+# 4. Copy bb.so into Gradle project
+mkdir -p android/app/src/main/jniLibs/arm64-v8a
+cp build/bb-android/bb.so android/app/src/main/jniLibs/arm64-v8a/libbb.so
+
+# 5. Build APK
+cd android && ./gradlew assembleDebug
+
+# 6. Install + forward port + launch
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb forward tcp:23456 tcp:23456
+adb shell am start -n com.phronemophobic.grease/.MainActivity
+
+# 7. Connect nREPL
+clj -M:repl/android
+#+END_SRC
+
+*** TODO Verify nREPL
+
+#+BEGIN_SRC clojure
+(+ 1 2)              ;; => 3
+(str "hello" " android")  ;; => "hello android"
+(System/getProperty "os.name")  ;; => "Linux"
+#+END_SRC
+
+* Phase 2 — Android View System Bindings
+
+Goal: basic View creation and manipulation from the nREPL, analogous to
+~grease.ios.uikit~.
+
+** Architecture: JNI vs ObjC dispatch
+
+On iOS, ~objc_msgSend~ is a universal "send any message to any object"
+dispatch. Android has no equivalent — each API requires an explicit JNI shim.
+
+| Aspect | iOS (~grease.ios.objc~) | Android (~grease.android.core~) |
+|--------+------------------------+---------------------------------|
+| Runtime dispatch | Universal ~objc_msgSend~ | Explicit C shim per method |
+| Dynamic class creation | ~objc_allocateClassPair~ + ~class_addMethod~ | Not feasible from native |
+| Main-thread dispatch | ~dispatch_async(_dispatch_main_q, ...)~ | ~Handler(Looper.getMainLooper()).post(Runnable)~ via JNI |
+| Callbacks | ObjC blocks via ~grease_make_void_block~ | ~clj-libffi~ closure → JNI ~View.OnClickListener~ |
+
+** 2.1  GreaseAndroid.java companion
+
+*** TODO Write GreaseAndroid.java
+
+#+BEGIN_SRC java
+package com.phronemophobic.grease;
+import android.app.Activity;
+import androidx.annotation.Keep;
+
+@Keep
+public class GreaseAndroid {
+    private static volatile Activity currentActivity;
+    public static Activity getCurrentActivity() { return currentActivity; }
+    public static void setCurrentActivity(Activity a) { currentActivity = a; }
+}
+#+END_SRC
+
+*** TODO Call setCurrentActivity from MainActivity.onCreate
+
+#+BEGIN_SRC java
+GreaseAndroid.setCurrentActivity(this);
+#+END_SRC
+
+** 2.2  android_bridge.c JNI shim layer
+
+*New file*: ~android/app/src/main/jni/android_bridge.c~
+
+*** TODO Cache JavaVM* at JNI_OnLoad
+
+#+BEGIN_SRC c
+static JavaVM *g_jvm = NULL;
+
+JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+    g_jvm = vm;
+    // Initialize GraalVM isolate here instead of lazily
+    graal_create_isolate(NULL, &isolate, &thread);
+    return JNI_VERSION_1_6;
+}
+
+static JNIEnv* get_env(void) {
+    JNIEnv *env = NULL;
+    if ((*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        (*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL);
+    }
+    return env;
+}
+#+END_SRC
+
+*** TODO Implement grease_get_activity
+
+#+BEGIN_SRC c
+static jobject g_activity = NULL;  // global ref set via JNI call from Java
+
+void* grease_get_activity(void) { return (void*)g_activity; }
+#+END_SRC
+
+Set ~g_activity~ via a JNI-exported function called from ~GreaseAndroid.setCurrentActivity~.
+
+*** TODO Implement grease_run_on_ui_thread
+
+#+BEGIN_SRC c
+// Requires caching the main-thread Handler jobject at startup.
+// Calls Handler.post(Runnable) via JNI.
+void grease_run_on_ui_thread(void (*fn)(void)) {
+    // Create a Runnable wrapping fn, post via Handler
+    // (implementation uses GetMethodID for Handler.post)
+}
+#+END_SRC
+
+*** TODO Implement grease_create_text_view and grease_set_text
+
+#+BEGIN_SRC c
+void* grease_create_text_view(void* activity) {
+    JNIEnv *env = get_env();
+    jclass cls = (*env)->FindClass(env, "android/widget/TextView");
+    jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>",
+                                         "(Landroid/content/Context;)V");
+    return (*env)->NewObject(env, cls, ctor, (jobject)activity);
+}
+
+void grease_set_text(void* view, const char* text) {
+    JNIEnv *env = get_env();
+    jclass cls = (*env)->GetObjectClass(env, (jobject)view);
+    jmethodID mid = (*env)->GetMethodID(env, cls, "setText",
+                                        "(Ljava/lang/CharSequence;)V");
+    jstring jstr = (*env)->NewStringUTF(env, text);
+    (*env)->CallVoidMethod(env, (jobject)view, mid, jstr);
+    (*env)->DeleteLocalRef(env, jstr);
+}
+#+END_SRC
+
+** 2.3  grease.android.core namespace
+
+*New file*: ~src/grease/android/core.clj~
+
+*** TODO Write grease.android.core
+
+#+BEGIN_SRC clojure
+(ns grease.android.core
+  (:require [com.phronemophobic.clj-libffi :as ffi]
+            [com.phronemophobic.grease :as grease]))
+
+(defn run-on-ui-thread!
+  "Posts f (0-arity) to the Android main Looper."
+  [f]
+  (ffi/call "grease_run_on_ui_thread" :void :pointer (make-callback f)))
+
+(defn get-activity []
+  (ffi/call "grease_get_activity" :pointer))
+
+(defn create-text-view [activity]
+  (ffi/call "grease_create_text_view" :pointer :pointer activity))
+
+(defn set-text! [view text]
+  (ffi/call "grease_set_text" :void
+            :pointer view
+            :pointer (grease/string->c text)))
+#+END_SRC
+
+*** TODO Preload grease.android.core in grease_android.clj
+
+Add to the SCI namespace preload list in ~grease_android.clj~ (same pattern
+as ~grease.ios.uikit~ is preloaded in ~grease.clj~).
+
+*** TODO Verify Phase 2
+
+#+BEGIN_SRC clojure
+(require '[grease.android.core :as android])
+(android/run-on-ui-thread!
+  #(android/set-text!
+     (android/create-text-view (android/get-activity))
+     "Hello from Clojure nREPL!"))
+#+END_SRC
+
+* Phase 3 — Idiomatic Clojure Android Interface
+
+Goal: Hiccup-driven View rendering + reactive state, mirroring the iOS idiom
+layer (~grease.ios.hiccup~, ~grease.ios.screen~, ~grease.ios.nav~).
+
+** New namespaces (in dependency order)
+
+#+BEGIN_EXAMPLE
+src/grease/android/jni.clj      JNI method-ID cache, call-method dispatch
+src/grease/android/views.clj    Widget factories + property setters
+src/grease/android/layout.clj   LinearLayout / ConstraintLayout wrappers
+src/grease/android/hiccup.clj   Hiccup → View renderer (mirrors grease.ios.hiccup)
+src/grease/android/repl.clj     on-ui-thread macro, view-tree, describe-view
+#+END_EXAMPLE
+
+The ~on-ui-thread~ macro in ~android/repl.clj~ mirrors ~on-main~ from
+~ios/repl.clj~ exactly: same promise/deliver/deref pattern, replacing
+~dispatch-main-async~ with ~run-on-ui-thread!~.
+
+JNI note: ~JNIEnv*~ is thread-local. Cache ~JavaVM*~ at ~JNI_OnLoad~; every
+native→Java call gets ~JNIEnv~ via ~GetEnv()~ or ~AttachCurrentThread()~. The
+~clj_generic_callback~ in ~bridge.c~ already demonstrates the isolate
+thread-attach pattern — the Android JNI side follows the same model.
+
+* File Map
+
+** New files
+
+#+BEGIN_EXAMPLE
+scripts/build-android-static-libs
+scripts/build-bb-android
+
+conf/reflectionconfig-arm64-android.json
+conf/jniconfig-arm64-android.json
+conf/resourceconfig-arm64-android.json
+
+src/com/phronemophobic/grease_android.clj
+src/grease/android/core.clj
+src/grease/android/jni.clj          (Phase 3)
+src/grease/android/views.clj        (Phase 3)
+src/grease/android/layout.clj       (Phase 3)
+src/grease/android/hiccup.clj       (Phase 3)
+src/grease/android/repl.clj         (Phase 3)
+
+android/settings.gradle
+android/build.gradle
+android/app/build.gradle
+android/app/src/main/AndroidManifest.xml
+android/app/src/main/java/com/phronemophobic/grease/MainActivity.java
+android/app/src/main/java/com/phronemophobic/grease/GreaseJni.java
+android/app/src/main/java/com/phronemophobic/grease/GreaseAndroid.java  (Phase 2)
+android/app/src/main/jni/CMakeLists.txt
+android/app/src/main/jni/bridge.c
+android/app/src/main/jni/android_bridge.c                               (Phase 2)
+#+END_EXAMPLE
+
+** Modified files (existing)
+
+#+BEGIN_EXAMPLE
+deps.edn    add :repl/android alias
+build.clj   add uberjar-android target
+#+END_EXAMPLE
+
+iOS files (~grease.clj~, ~build-bb-o~, ~build-demo-app~, ~xcode/~) are
+*not modified*.
+
+* Reference Files
+
+| File | Role |
+|------+------|
+| ~scripts/build-ios-static-libs~ | Template for ~build-android-static-libs~ |
+| ~scripts/build-bb-o~ | Template for ~build-bb-android~ |
+| ~src/com/phronemophobic/grease.clj~ | Template for ~grease_android.clj~ |
+| ~xcode/MobileTest/csource/Bridge.m~ | Template for ~bridge.c~ |
+| ~graal/sdk/.../Platform.java:353~ | Confirms ~ANDROID_AARCH64~ class exists |
+| ~openjdk-mobile/make/autoconf/flags-cflags.m4~ | Android configure flag source |
+| ~build.clj:47~ (~uberjar-basic~) | Template for ~uberjar-android~ target |
+
+* Verification Checklist
+
+- [ ] ~file libffi/install-android-aarch64/lib/libffi.a~ reports ELF AArch64
+- [ ] ~file build/staticjdk-android-arm64/lib/static/libjava.a~ reports ELF AArch64
+- [ ] ~file build/bb-android/bb.so~ reports ELF shared object ARM aarch64
+- [ ] ~./gradlew assembleDebug~ succeeds
+- [ ] ~adb install~ succeeds; app launches without crash
+- [ ] ~adb forward tcp:23456 tcp:23456~ + ~clj -M:repl/android~ connects
+- [ ] ~(+ 1 2)~ → ~3~ at the REPL
+- [ ] ~(System/getProperty "os.name")~ → ~"Linux"~
+- [ ] Phase 2: View created and visible on device from nREPL
